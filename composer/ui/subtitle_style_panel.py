@@ -9,13 +9,17 @@ import time
 from dataclasses import asdict
 from typing import Callable, Optional
 
-from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QLinearGradient, QPainter
-from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFontComboBox, QFormLayout,
-                               QGroupBox, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSlider, QSpinBox,
+from pathlib import Path
+
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QLinearGradient, QPainter, QPixmap
+from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog, QFontComboBox,
+                               QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QListView, QListWidget,
+                               QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSlider, QSpinBox,
                                QVBoxLayout, QWidget)
 
 from ..schema import SubtitleStyle
+from ..subtitle_presets import Preset, PresetError, PresetStore, preset_from_style, style_from_preset
 from ..subtitle_style import APPEAR_LABELS, POSITION_LABELS, appear_state
 from .model import ProjectModel
 from .sub_paint import paint_subtitle
@@ -79,6 +83,32 @@ class StyleSample(QWidget):
         p.end()
 
 
+THUMB = QSize(128, 72)
+NAME_ROLE = Qt.UserRole + 1
+
+
+def preset_thumbnail(style: SubtitleStyle, out_w: int, out_h: int, text: str = "자막 예시") -> QPixmap:
+    """스타일 모음 썸네일: 배경 그라데이션 위에 효과가 끝난 모양으로 그림."""
+    pm = QPixmap(THUMB)
+    pm.fill(QColor("#111"))
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    w, h = THUMB.width(), THUMB.height()
+    ar = out_w / max(1, out_h)
+    fw, fh = (w, w / ar) if w / h < ar else (h * ar, h)
+    fr = QRectF((w - fw) / 2, (h - fh) / 2, fw, fh)
+    g = QLinearGradient(fr.topLeft(), fr.bottomRight())
+    g.setColorAt(0, QColor("#3a6186")); g.setColorAt(0.5, QColor("#89a2b5")); g.setColorAt(1, QColor("#e0c3a0"))
+    p.fillRect(fr, g)
+    # 썸네일에서는 글자가 너무 작아지지 않게 약간 키움
+    k = 3.0  # 72px 짜리 그림에서도 모양(색·외곽선·상자)을 알아볼 수 있게 글자 쪽만 키움 (자리는 그대로)
+    big = SubtitleStyle(**{**asdict(style), "size": int(style.size * k), "outline": style.outline * k * 0.8,
+                           "box_padding": int(style.box_padding * k * 0.7)})
+    paint_subtitle(p, fr, text, big, out_h, appear_state(big, text, 99.0, 99.0, 198.0))
+    p.end()
+    return pm
+
+
 class ColorButton(QPushButton):
     def set_color(self, color: str):
         self.color = color
@@ -88,15 +118,52 @@ class ColorButton(QPushButton):
 
 
 class SubtitleStylePanel(QWidget):
-    def __init__(self, model: ProjectModel, parent=None):
+    def __init__(self, model: ProjectModel, parent=None, store: Optional[PresetStore] = None):
         super().__init__(parent)
         self.model = model
         self._loading = False
-        # 테스트에서 바꿔 끼울 수 있는 색 고르기 함수: (현재색, 제목) -> "#RRGGBB" | None
+        self.store = store or PresetStore()
+        # 테스트에서 바꿔 끼울 수 있는 함수들
         self.pick_color: Callable[[str, str], Optional[str]] = self._pick_color_dialog
+        self.ask_text: Callable[[str, str, str], Optional[str]] = self._ask_text
+        self.ask_open_file: Callable[[], Optional[Path]] = self._ask_open_file
+        self.ask_save_file: Callable[[str], Optional[Path]] = self._ask_save_file
+        self.confirm: Callable[[str], bool] = lambda t: QMessageBox.question(self, "스타일 모음", t) == QMessageBox.Yes
+        self.notify: Callable[[str], None] = lambda t: QMessageBox.information(self, "스타일 모음", t)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+
+        # --- 스타일 모음 ---
+        g_pre = QGroupBox("스타일 모음 — 누르면 바로 적용 (Ctrl+Z 로 되돌리기)")
+        pl = QVBoxLayout(g_pre)
+        pl.setContentsMargins(6, 6, 6, 6)
+        self.presets = QListWidget()
+        self.presets.setViewMode(QListView.IconMode)
+        self.presets.setIconSize(THUMB)
+        self.presets.setGridSize(QSize(THUMB.width() + 12, THUMB.height() + 26))
+        self.presets.setResizeMode(QListView.Adjust)
+        self.presets.setMovement(QListView.Static)
+        self.presets.setWrapping(True)
+        self.presets.setUniformItemSizes(True)
+        self.presets.setWordWrap(True)
+        self.presets.setFixedHeight(2 * (THUMB.height() + 26) + 12)
+        self.presets.setToolTip("스타일을 누르면 지금 프로젝트 자막에 적용됩니다")
+        pl.addWidget(self.presets)
+        r = QHBoxLayout()
+        self.btn_save_preset = QPushButton("내 스타일로 저장…")
+        self.btn_rename_preset = QPushButton("이름 바꾸기…")
+        self.btn_delete_preset = QPushButton("삭제")
+        self.btn_import_preset = QPushButton("가져오기…")
+        self.btn_export_preset = QPushButton("내보내기…")
+        for b in (self.btn_save_preset, self.btn_rename_preset, self.btn_delete_preset):
+            r.addWidget(b)
+        r.addStretch(1)
+        for b in (self.btn_import_preset, self.btn_export_preset):
+            r.addWidget(b)
+        pl.addLayout(r)
+        outer.addWidget(g_pre)
+
         self.sample = StyleSample()
         outer.addWidget(self.sample)
         row = QHBoxLayout()
@@ -214,6 +281,13 @@ class SubtitleStylePanel(QWidget):
             btn.clicked.connect(lambda _=False, a=attr, t=title: self._choose(a, t))
         self.btn_replay.clicked.connect(self.sample.replay)
         self.btn_reset.clicked.connect(self.reset_defaults)
+        self.presets.itemClicked.connect(lambda it: self.apply_preset(it.data(NAME_ROLE)))
+        self.presets.currentItemChanged.connect(lambda *_: self._update_preset_buttons())
+        self.btn_save_preset.clicked.connect(self.save_preset)
+        self.btn_rename_preset.clicked.connect(self.rename_preset)
+        self.btn_delete_preset.clicked.connect(self.delete_preset)
+        self.btn_import_preset.clicked.connect(self.import_presets)
+        self.btn_export_preset.clicked.connect(self.export_presets)
 
     def _apply_writing_system(self):
         cur = self.font_combo.currentFont()
@@ -230,6 +304,150 @@ class SubtitleStylePanel(QWidget):
         c = self.pick_color(getattr(self.st, attr), title)
         if c:
             self._set(None, attr, c.upper())
+
+    # ------------------------------------------------------------------ 스타일 모음
+    def _fonts(self) -> list[str]:
+        return QFontDatabase.families()
+
+    def _out(self):
+        o = self.model.project.output
+        return o.width, o.height
+
+    def preset_style(self, preset: Preset) -> SubtitleStyle:
+        return style_from_preset(preset, *self._out(), self._fonts())
+
+    def fill_presets(self):
+        cur = self.presets.currentItem().data(NAME_ROLE) if self.presets.currentItem() else None
+        sig = (self._out(), tuple(p.name for p in self.store.all()),
+               tuple(tuple(sorted(p.style.items())) for p in self.store.user))
+        if sig != getattr(self, "_preset_sig", None):
+            self._preset_sig = sig
+            self.presets.blockSignals(True)
+            self.presets.clear()
+            w, h = self._out()
+            for pr in self.store.all():
+                st = self.preset_style(pr)
+                it = QListWidgetItem(QIcon(preset_thumbnail(st, w, h)), pr.name if pr.builtin else f"★ {pr.name}")
+                it.setData(NAME_ROLE, pr.name)
+                tip = pr.description or "내 스타일"
+                if pr.fonts and st.font != pr.fonts[0]:
+                    tip += f"\n(글꼴 '{pr.fonts[0]}' 이 없어 '{st.font}' 로 대신합니다)"
+                it.setToolTip(tip)
+                self.presets.addItem(it)
+            self.presets.blockSignals(False)
+        # 지금 스타일과 같은 것을 표시
+        match = next((pr.name for pr in self.store.all() if self.preset_style(pr) == self.st), None)
+        target = match or cur
+        self.presets.blockSignals(True)
+        self.presets.setCurrentItem(self._preset_item(target) if target else None)
+        if not match and self.presets.currentItem():
+            self.presets.currentItem().setSelected(False)
+        self.presets.blockSignals(False)
+        self._update_preset_buttons()
+
+    def _preset_item(self, name: str) -> Optional[QListWidgetItem]:
+        for i in range(self.presets.count()):
+            if self.presets.item(i).data(NAME_ROLE) == name:
+                return self.presets.item(i)
+        return None
+
+    def selected_preset(self) -> Optional[Preset]:
+        it = self.presets.currentItem()
+        return self.store.find(it.data(NAME_ROLE)) if it else None
+
+    def _update_preset_buttons(self):
+        pr = self.selected_preset()
+        user = bool(pr and not pr.builtin)
+        self.btn_rename_preset.setEnabled(user)
+        self.btn_delete_preset.setEnabled(user)
+        self.btn_export_preset.setEnabled(bool(self.store.user))
+
+    def apply_preset(self, name: str):
+        pr = self.store.find(name)
+        if pr is None:
+            return
+        st = self.preset_style(pr)
+        if st == self.st:
+            return
+        self.model.edit(lambda p: setattr(p.subtitle, "style", st))  # 되돌리기 한 번
+
+    def _ask_text(self, title: str, label: str, default: str) -> Optional[str]:
+        t, ok = QInputDialog.getText(self, title, label, text=default)
+        return t.strip() if ok and t.strip() else None
+
+    def _ask_open_file(self) -> Optional[Path]:
+        f, _ = QFileDialog.getOpenFileName(self, "자막 스타일 가져오기", "", "자막 스타일 (*.json)")
+        return Path(f) if f else None
+
+    def _ask_save_file(self, default: str) -> Optional[Path]:
+        f, _ = QFileDialog.getSaveFileName(self, "내 자막 스타일 내보내기", default, "자막 스타일 (*.json)")
+        if not f:
+            return None
+        p = Path(f)
+        return p if p.suffix.lower() == ".json" else p.with_suffix(".json")
+
+    def save_preset(self):
+        name = self.ask_text("내 스타일로 저장", "스타일 이름:", "내 스타일")
+        if not name:
+            return
+        existing = self.store.find(name)
+        replace = False
+        if existing is not None:
+            if existing.builtin:
+                name = self.store.unique_name(name)
+            elif self.confirm(f"'{name}' 스타일이 이미 있습니다. 지금 스타일로 바꿀까요?"):
+                replace = True
+            else:
+                return
+        pr = self.store.add(preset_from_style(name, self.st, *self._out()), replace=replace)
+        self.fill_presets()
+        self.presets.setCurrentItem(self._preset_item(pr.name))
+
+    def rename_preset(self):
+        pr = self.selected_preset()
+        if not pr or pr.builtin:
+            return
+        new = self.ask_text("이름 바꾸기", "새 이름:", pr.name)
+        if not new or new == pr.name:
+            return
+        try:
+            self.store.rename(pr.name, new)
+        except PresetError as e:
+            self.notify(str(e))
+            return
+        self.fill_presets()
+        self.presets.setCurrentItem(self._preset_item(new))
+
+    def delete_preset(self):
+        pr = self.selected_preset()
+        if not pr or pr.builtin:
+            return
+        if not self.confirm(f"내 스타일 '{pr.name}' 을(를) 지울까요?\n(프로젝트에 이미 적용된 자막 모양은 그대로입니다)"):
+            return
+        self.store.delete(pr.name)
+        self.fill_presets()
+
+    def import_presets(self):
+        path = self.ask_open_file()
+        if not path:
+            return
+        try:
+            added = self.store.import_file(path)
+        except (PresetError, OSError) as e:
+            self.notify(f"가져오지 못했습니다:\n{e}")
+            return
+        self.fill_presets()
+        self.notify(f"스타일 {len(added)}개를 가져왔습니다: " + ", ".join(p.name for p in added))
+
+    def export_presets(self):
+        if not self.store.user:
+            self.notify("내보낼 내 스타일이 없습니다. 먼저 '내 스타일로 저장…'을 하세요.")
+            return
+        path = self.ask_save_file("내 자막 스타일.json")
+        if not path:
+            return
+        self.store.export(path)
+        self.notify(f"내 스타일 {len(self.store.user)}개를 저장했습니다:\n{path}")
 
     def reset_defaults(self):
         d = SubtitleStyle()
@@ -270,6 +488,7 @@ class SubtitleStylePanel(QWidget):
         finally:
             self._loading = False
         self.sample.set_style(st, p.output.width, p.output.height)
+        self.fill_presets()
         if not p.subtitle.burn_in:
             self.note.setText("⚠ 지금은 '소프트 자막'(켜고 끄는 자막)으로 내보내도록 되어 있어, 최종 영상에서는 이 스타일·효과가 "
                               "적용되지 않습니다(재생 프로그램이 정함). ⚙ 출력 설정 ▸ 자막 ▸ '영상에 자막 입히기'를 켜세요.")

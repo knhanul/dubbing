@@ -22,7 +22,7 @@ import pytest  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _quiet_settings():
+def _quiet_settings(tmp_path_factory, monkeypatch):
     """대부분의 UI 테스트는 결정적으로 돌도록 자동 미리보기를 끄고 최근 파일 목록을 비웁니다.
     (자동 미리보기는 tests/test_auto_preview.py 에서 따로 켜서 확인)"""
     from PySide6.QtCore import QSettings
@@ -31,4 +31,6 @@ def _quiet_settings():
     s.setValue("file/recent", [])
     s.setValue("import/skip_order_dialog", True)  # 순서 정하기 창은 tests/test_drop_order.py 에서 따로
     s.sync()
+    # 내 자막 스타일(subtitle_presets.json)은 테스트마다 빈 임시 폴더에
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path_factory.mktemp("localappdata")))
     yield
