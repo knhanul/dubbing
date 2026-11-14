@@ -577,6 +577,7 @@ class ProjectPage(QWidget):
         f, _ = QFileDialog.getOpenFileName(self, "자막 파일", str(self.model.project.base_dir), "자막 (*.srt *.vtt)")
         if f:
             def fn(p):
+                self._auto_base(p, f)
                 p.subtitle.file = _rel(p, f)
                 p.subtitle.items = None
             self._set(None, fn)
@@ -590,7 +591,12 @@ class ProjectPage(QWidget):
         f, _ = QFileDialog.getOpenFileName(self, "배경음악", str(self.model.project.base_dir),
                                            "오디오 (*.mp3 *.wav *.m4a *.aac *.flac *.ogg *.opus)")
         if f:
-            self._set(None, lambda p: setattr(p.bgm, "file", _rel(p, f)))
+            self._set(None, lambda p: (self._auto_base(p, f), setattr(p.bgm, "file", _rel(p, f))))
+
+    def _auto_base(self, p, f):
+        """저장한 적 없고 아무것도 없는 '제목 없음' 프로젝트면 처음 고른 파일의 폴더를 작업 폴더로."""
+        if self.model.path is None and not p.clips and not p.subtitle.file and not p.bgm.file:
+            p.base_dir = Path(f).parent
 
     @staticmethod
     def _swatch(btn: QPushButton, color: str):

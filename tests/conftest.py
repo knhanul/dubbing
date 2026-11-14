@@ -16,3 +16,18 @@ def pytest_configure(config):
         QStandardPaths.setTestModeEnabled(True)
     except Exception:  # noqa: BLE001
         pass
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _quiet_settings():
+    """대부분의 UI 테스트는 결정적으로 돌도록 자동 미리보기를 끄고 최근 파일 목록을 비웁니다.
+    (자동 미리보기는 tests/test_auto_preview.py 에서 따로 켜서 확인)"""
+    from PySide6.QtCore import QSettings
+    s = QSettings("knhanul", "VideoComposer")
+    s.setValue("view/auto_preview", False)
+    s.setValue("file/recent", [])
+    s.sync()
+    yield

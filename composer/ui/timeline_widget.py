@@ -50,6 +50,7 @@ class TimelineCanvas(QWidget):
         self.setMouseTracking(True)
         self.setMinimumHeight(RULER_H + sum(t[2] for t in TRACKS) + 8)
         self._drag: Optional[dict] = None
+        self.empty_hint = ""  # 클립이 없을 때 가운데 안내
         self.drop_hint: Optional[dict] = None  # 드롭 위치 표시 {"index": n, "x": px, "text": str}
         self.setAcceptDrops(True)
         model.changed.connect(self._relayout)
@@ -202,6 +203,16 @@ class TimelineCanvas(QWidget):
             p.setClipRect(rect.adjusted(3, 1, -3, -1))
             p.drawText(rect.adjusted(5, 2, -3, -2), Qt.AlignLeft | Qt.AlignVCenter, text)
             p.restore()
+
+        if self.empty_hint and not self.model.project.clips:
+            f3 = QFont(self.font())
+            f3.setPointSizeF(11)
+            f3.setBold(True)
+            p.setFont(f3)
+            p.setPen(QColor("#8a8f99"))
+            vis = self.visibleRegion().boundingRect()
+            p.drawText(QRectF(vis.left() + LABEL_W, RULER_H, max(200, vis.width() - LABEL_W), self.height() - RULER_H),
+                       Qt.AlignCenter, self.empty_hint)
 
         # 드롭 위치 표시
         if self.drop_hint:

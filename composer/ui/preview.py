@@ -1,6 +1,10 @@
 """미리보기 플레이어: 영상 위에 현재 자막을 실시간으로 겹쳐 보여줍니다.
 
 자막은 렌더하지 않고 프로젝트 값으로 바로 그리므로, 자막을 미세 조정하면 즉시 반영됩니다.
+
+미리보기 영상이 없을 때는 **타임라인 시계 모드**로 동작합니다. 자체 시계로 재생/정지/이동하고
+(길이 = 타임라인 전체 길이), 화면에는 현재 클립의 그림(썸네일)을 보여 줍니다. 재생 위치, 시간 표시,
+타임라인 재생선, 자막 오버레이, 더빙 패널은 모두 이 한 시계(position())를 따릅니다.
 """
 from __future__ import annotations
 
@@ -9,10 +13,10 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QRectF, QSizeF, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from PySide6.QtWidgets import (QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QPushButton, QSlider,
+from PySide6.QtWidgets import (QGraphicsPixmapItem, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QPushButton, QSlider,
                                QVBoxLayout, QWidget)
 
 
@@ -29,6 +33,9 @@ class _View(QGraphicsView):
         super().__init__(scene, parent)
         self.text = ""
         self.notice = ""
+        self.progress_text = ""
+        self.progress = None  # 0~1 또는 None
+        self.empty_hint = ""
         self.setRenderHint(QPainter.Antialiasing)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -57,6 +64,31 @@ class _View(QGraphicsView):
                                     Qt.RoundJoin))
                 painter.drawPath(path)
                 painter.fillPath(path, QColor("#ffffff"))
+        if self.empty_hint:
+            f = QFont(self.font())
+            f.setPixelSize(max(14, int(vh * 0.04)))
+            f.setBold(True)
+            painter.setFont(f)
+            painter.setPen(QColor("#c8ccd4"))
+            painter.drawText(QRectF(20, 0, vw - 40, vh), Qt.AlignCenter | Qt.TextWordWrap, "⬇\n" + self.empty_hint)
+        if self.progress_text:
+            f = QFont(self.font())
+            f.setPixelSize(15)
+            f.setBold(True)
+            painter.setFont(f)
+            bw, bh = min(vw - 40, 340), 54
+            box = QRectF((vw - bw) / 2, vh * 0.42, bw, bh)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 190))
+            painter.drawRoundedRect(box, 8, 8)
+            painter.setPen(QColor("#ffffff"))
+            painter.drawText(box.adjusted(0, 6, 0, -22), Qt.AlignCenter, self.progress_text)
+            if self.progress is not None:
+                track = QRectF(box.left() + 16, box.bottom() - 16, bw - 32, 6)
+                painter.setBrush(QColor("#44474f"))
+                painter.drawRoundedRect(track, 3, 3)
+                painter.setBrush(QColor("#4dd2ff"))
+                painter.drawRoundedRect(QRectF(track.left(), track.top(), track.width() * self.progress, 6), 3, 3)
         if self.notice:
             f = QFont(self.font())
             f.setPixelSize(13)
@@ -80,6 +112,18 @@ class PreviewPlayer(QWidget):
         self.scene = QGraphicsScene(self)
         self.video_item = QGraphicsVideoItem()
         self.scene.addItem(self.video_item)
+        self.placeholder = QGraphicsPixmapItem()
+        self.placeholder.setTransformationMode(Qt.SmoothTransformation)
+        self.scene.addItem(self.placeholder)
+        self.placeholder_fn = None  # t -> (key, QPixmap | None)  미리보기가 없을 때 보여 줄 그림
+        self._placeholder_key = None
+        self.frame_size = QSizeF(1920, 1080)  # 미리보기가 없을 때 화면 비율(출력 크기)
+        self.before_play = None  # 미리보기 없이 재생하기 전에 물어볼 함수 () -> bool
+        # 타임라인 시계 (미리보기 영상이 없을 때)
+        self.timeline_duration = 0.0
+        self._v_pos = 0.0
+        self._v_playing = False
+        self._v_t0 = 0.0
         self.player.setVideoOutput(self.video_item)
         self.view = _View(self.scene)
         self.media_path: Optional[Path] = None
@@ -89,6 +133,8 @@ class PreviewPlayer(QWidget):
 
         self.btn_play = QPushButton("▶ 재생")
         self.btn_play.setToolTip("재생/일시정지 (Space)")
+        self.btn_refresh = QPushButton("🔄 미리보기 새로 만들기")
+        self.btn_refresh.setToolTip("지금 바로 360p 미리보기를 다시 만듭니다 (F5). 자동 미리보기가 켜져 있으면 보통 누를 필요가 없습니다.")
         self.btn_back = QPushButton("⏮")
         self.btn_back.setToolTip("처음으로")
         self.slider = QSlider(Qt.Horizontal)
@@ -103,6 +149,7 @@ class PreviewPlayer(QWidget):
         bar = QHBoxLayout()
         bar.addWidget(self.btn_back)
         bar.addWidget(self.btn_play)
+        bar.addWidget(self.btn_refresh)
         bar.addWidget(self.slider, 1)
         bar.addWidget(self.lbl_time)
         bar.addWidget(QLabel("🔊"))
@@ -127,13 +174,72 @@ class PreviewPlayer(QWidget):
         self._last_pos = -1.0
 
     # --- 미디어 ---
-    def load(self, path: Optional[Path], keep_position: bool = True) -> None:
+    def has_media(self) -> bool:
+        return self.media_path is not None
+
+    def load(self, path: Optional[Path], keep_position: bool = True, resume: bool = False) -> None:
+        """resume=True 면 재생 중이었을 때 새 영상에서 같은 위치부터 이어서 재생합니다."""
         pos = self.position() if keep_position else 0.0
+        resume_play = resume and self.is_playing()
+        was_playing = self._v_playing
+        self._v_stop()
         self.player.stop()
         self.media_path = Path(path) if path else None
         self.player.setSource(QUrl.fromLocalFile(str(path)) if path else QUrl())
-        if keep_position and pos > 0:
-            QTimer.singleShot(150, lambda: self.seek(pos))
+        self.video_item.setVisible(self.has_media())
+        self.placeholder.setVisible(not self.has_media())
+        self._placeholder_key = None
+        if not self.has_media():
+            self._v_pos = min(pos, self.timeline_duration) if self.timeline_duration else pos
+            self.slider.setRange(0, int(self.timeline_duration * 1000))
+            self._fit()
+            if was_playing:
+                self._on_state(None)
+            self._tick(force=True)
+        elif (keep_position and pos > 0) or resume_play:
+            def restore():
+                self.seek(pos)
+                if resume_play:
+                    self.player.play()
+            QTimer.singleShot(150, restore)
+
+    def set_timeline_duration(self, d: float) -> None:
+        self.timeline_duration = max(0.0, float(d))
+        if not self.has_media():
+            self.slider.setRange(0, int(self.timeline_duration * 1000))
+            self.duration_changed.emit(self.timeline_duration)
+            self._tick(force=True)
+
+    def set_frame_size(self, w: int, h: int) -> None:
+        self.frame_size = QSizeF(max(1, w), max(1, h))
+        if not self.has_media():
+            self._placeholder_key = None
+            self._fit()
+            self._tick(force=True)
+
+    # --- 타임라인 시계 ---
+    def _v_now(self) -> float:
+        if not self._v_playing:
+            return self._v_pos
+        t = self._v_pos + (time.perf_counter() - self._v_t0)
+        return min(t, self.timeline_duration) if self.timeline_duration else t
+
+    def _v_stop(self):
+        if self._v_playing:
+            self._v_pos = self._v_now()
+            self._v_playing = False
+
+    def set_progress(self, text: str, fraction) -> None:
+        """미리보기 만드는 중 표시 (영상 가운데)."""
+        self.view.progress_text = text
+        self.view.progress = fraction
+        self.btn_refresh.setText("⏳ 미리보기 만드는 중…" if text else "🔄 미리보기 새로 만들기")
+        self.view.viewport().update()
+
+    def set_empty_hint(self, text: str) -> None:
+        if text != self.view.empty_hint:
+            self.view.empty_hint = text
+            self.view.viewport().update()
 
     def set_notice(self, text: str) -> None:
         self.view.notice = text
@@ -141,6 +247,8 @@ class PreviewPlayer(QWidget):
 
     def position(self) -> float:
         """재생 중에는 positionChanged 간격 사이를 보간해서 부드러운 카운트다운을 만듭니다."""
+        if not self.has_media():
+            return self._v_now()
         raw = self.player.position()
         now = time.perf_counter()
         if raw != self._raw_ms:
@@ -150,23 +258,50 @@ class PreviewPlayer(QWidget):
         return raw / 1000.0
 
     def duration(self) -> float:
+        if not self.has_media():
+            return self.timeline_duration
         return self.player.duration() / 1000.0
 
     def is_playing(self) -> bool:
+        if not self.has_media():
+            return self._v_playing
         return self.player.playbackState() == QMediaPlayer.PlayingState
 
     def play(self):
-        if self.media_path:
+        if self.has_media():
             self.player.play()
+            return
+        if self._v_playing:
+            return
+        if self.before_play is not None and not self.before_play():
+            return
+        if self.has_media():  # before_play 가 미리보기를 만들었을 수 있음
+            self.player.play()
+            return
+        if self.timeline_duration and self._v_pos >= self.timeline_duration - 0.01:
+            self._v_pos = 0.0
+        self._v_t0 = time.perf_counter()
+        self._v_playing = True
+        self._on_state(None)
 
     def pause(self):
-        self.player.pause()
+        if self.has_media():
+            self.player.pause()
+        elif self._v_playing:
+            self._v_stop()
+            self._on_state(None)
+            self._tick(force=True)
 
     def toggle(self):
         self.pause() if self.is_playing() else self.play()
 
     def seek(self, t: float):
-        self.player.setPosition(int(max(0.0, t) * 1000))
+        t = max(0.0, t)
+        if self.has_media():
+            self.player.setPosition(int(t * 1000))
+        else:
+            self._v_pos = min(t, self.timeline_duration) if self.timeline_duration else t
+            self._v_t0 = time.perf_counter()
         self._tick(force=True)
 
     def set_volume_factor(self, factor: float):
@@ -179,28 +314,54 @@ class PreviewPlayer(QWidget):
 
     # --- 내부 ---
     def _fit(self):
-        size = self.video_item.nativeSize()
-        if size.isEmpty():
-            size = QSizeF(1920, 1080)
-        self.video_item.setSize(size)
-        self.scene.setSceneRect(QRectF(0, 0, size.width(), size.height()))
-        self.view.fitInView(self.video_item, Qt.KeepAspectRatio)
+        if self.has_media():
+            size = self.video_item.nativeSize()
+            if size.isEmpty():
+                size = self.frame_size
+            self.video_item.setSize(size)
+        else:
+            size = self.frame_size
+        rect = QRectF(0, 0, size.width(), size.height())
+        self.scene.setSceneRect(rect)
+        self.view.fitInView(rect, Qt.KeepAspectRatio)
+
+    def _update_placeholder(self, t: float):
+        if self.has_media() or self.placeholder_fn is None:
+            return
+        key, pix = self.placeholder_fn(t)
+        if key == self._placeholder_key:
+            return
+        self._placeholder_key = key
+        if pix is None or pix.isNull():
+            self.placeholder.setPixmap(QPixmap())
+            return
+        fw, fh = self.frame_size.width(), self.frame_size.height()
+        scaled = pix.scaled(int(fw), int(fh), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.placeholder.setPixmap(scaled)
+        self.placeholder.setPos((fw - scaled.width()) / 2, (fh - scaled.height()) / 2)
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         self._fit()
 
     def _on_duration(self, ms):
+        if not self.has_media():
+            return
         self.slider.setRange(0, int(ms))
         self.duration_changed.emit(ms / 1000.0)
 
     def _on_state(self, state):
-        playing = state == QMediaPlayer.PlayingState
+        playing = self.is_playing() if state is None else state == QMediaPlayer.PlayingState
         self.btn_play.setText("⏸ 일시정지" if playing else "▶ 재생")
         self.playing_changed.emit(playing)
 
     def _tick(self, force: bool = False):
         t = self.position()
+        if not self.has_media():
+            if self._v_playing and self.timeline_duration and t >= self.timeline_duration:
+                self._v_stop()
+                self._on_state(None)
+            self._update_placeholder(t)
         if not force and abs(t - self._last_pos) < 1e-4:
             return
         self._last_pos = t

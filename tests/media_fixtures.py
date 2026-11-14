@@ -26,3 +26,9 @@ def make_media(folder: Path) -> dict:
         "1\n00:00:00,500 --> 00:00:02,000\n안녕하세요\n\n2\n00:00:03,000 --> 00:00:05,500\n두 번째 자막\n",
         encoding="utf-8-sig")
     return {"folder": folder}
+
+
+def make_image(path: Path, w: int = 320, h: int = 180, color: str = "red") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _ff("-f", "lavfi", "-i", f"color=c={color}:s={w}x{h}", "-frames:v", "1", str(path))
+    return path

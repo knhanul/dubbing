@@ -1,6 +1,7 @@
 """더빙 패널: 다음 자막 미리 보기 + 카운트다운 + 마이크 녹음(줄별/연속 세션)."""
 from __future__ import annotations
 
+import math
 import statistics
 import time
 from typing import Optional
@@ -268,7 +269,7 @@ class DubbingPanel(QWidget):
             self.lbl_next_time.setText(f"⏳ {u:.1f}초 후 표시  (표시 {nxt.duration:.1f}초)")
             soon = u <= 3.0
             self.lbl_next_time.setStyleSheet("color:#ff6b6b" if u <= 1.0 else "color:#ffd166" if soon else "")
-            self.lbl_cue.setText(str(int(u) + 1) if soon and u > 0 else "")
+            self.lbl_cue.setText(str(max(1, math.ceil(u - 1e-6))) if soon and u > 0 else "")
         else:
             self.lbl_next.setText("— (마지막 자막입니다)")
             self.lbl_next_time.setText("")
@@ -326,9 +327,7 @@ class DubbingPanel(QWidget):
     # --- 녹음 ---
     def _check_recorder(self) -> bool:
         self.ensure_devices()
-        if not self.player.media_path:
-            QMessageBox.information(self, "더빙", "먼저 미리보기 렌더를 하거나 동영상을 열어 주세요.")
-            return False
+        # 미리보기 영상이 없어도 타임라인 시계에 맞춰 녹음할 수 있습니다(화면엔 클립 그림 + 자막).
         if not self.recorder.is_open:
             try:
                 self.recorder.open(self.dev.currentData())

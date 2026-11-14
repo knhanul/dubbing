@@ -102,7 +102,7 @@ class ProjectModel(QObject):
 
     def replace_project(self, project: Project) -> None:
         """프로젝트 내용 전체를 바꿉니다(파일 경로 유지). 실행 취소 한 단계로 기록됩니다.
-        (작업 폴더는 빈 프로젝트일 때만 바뀌므로 되돌려도 문제없습니다.)"""
+        (작업 폴더는 아무것도 없는 '제목 없음' 프로젝트일 때만 바뀌므로 되돌려도 문제없습니다.)"""
         self._undo.append(self._snapshot)
         if len(self._undo) > 200:
             self._undo.pop(0)
@@ -200,4 +200,6 @@ def _rebase_paths(project: Project, old: Path, new: Path) -> None:
     project.bgm.file = fix(project.bgm.file)
     for t in project.dubbing.takes:
         t.file = fix(t.file)
-    project.dubbing.folder = fix(project.dubbing.folder) or "takes"
+    # 아직 녹음이 없으면 기본 'takes' 폴더는 새 JSON 옆에 그대로 둠
+    if project.dubbing.takes or (project.dubbing.folder or "takes") != "takes":
+        project.dubbing.folder = fix(project.dubbing.folder) or "takes"

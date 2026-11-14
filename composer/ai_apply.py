@@ -38,7 +38,7 @@ def apply_ai_result(project: Project, data: dict, folder: Path | str, keep_base:
     * subtitle/bgm: AI 결과에 있을 때만 교체(자막 미세 조정 목록은 새 파일이면 초기화)
     * dubbing: 그대로 유지
     * keep_base=True 면 현재 작업 폴더를 유지하고 AI 의 상대 경로를 그 폴더 기준으로 바꿉니다.
-      False 면 작업 폴더를 AI 대화상자의 폴더로 바꿉니다(빈 프로젝트일 때).
+      False 면 작업 폴더를 AI 대화상자의 폴더로 바꿉니다(아무것도 없는 '제목 없음' 프로젝트일 때).
     """
     folder = Path(folder)
     base = Path(project.base_dir) if keep_base else folder

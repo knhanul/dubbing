@@ -117,7 +117,7 @@ def test_apply_replaces_timeline_keeps_path_single_undo(win):
     assert [c.file for c in w.model.project.clips] == ["img1.png", "vid1.mp4"]
     assert w.model.path == path and w.model.dirty  # 같은 파일 유지
     assert w.model.project.subtitle.file == "subs.srt"
-    assert w.windowTitle().endswith("mine.json *")
+    assert w.windowTitle().startswith("mine.json *")
     assert "타임라인에 반영했습니다" in w.statusBar().currentMessage()
     assert "프로젝트 열기" not in w.statusBar().currentMessage()
     w.save()  # Ctrl+S → 저장 창 없이 같은 파일
@@ -135,7 +135,7 @@ def test_apply_on_blank_project_is_unsaved_and_save_defaults(win, monkeypatch):
     w.apply_ai_result(AI, folder)
     assert w.dialogs == [] and w.model.path is None and w.model.dirty
     assert w.model.project.base_dir == folder
-    assert w.windowTitle().endswith("AI 프로젝트 *")
+    assert w.windowTitle().startswith("AI 프로젝트 *")
     assert w.statusBar().currentMessage().endswith("저장하려면 Ctrl+S")
     seen = []
     monkeypatch.setattr(mw.QFileDialog, "getSaveFileName",

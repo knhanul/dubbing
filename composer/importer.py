@@ -108,7 +108,7 @@ def describe_unsupported(paths: list[Path]) -> str:
 
 
 def guess_base_dir(plan: ImportPlan) -> Optional[Path]:
-    """빈 프로젝트에 처음 드롭할 때 작업 폴더로 쓸 위치."""
+    """아무것도 없는 '제목 없음' 프로젝트에 처음 추가할 때 작업 폴더로 쓸 위치."""
     if plan.folders:
         return plan.folders[0]
     for group in (plan.media, plan.subtitles, plan.audio):
