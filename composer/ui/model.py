@@ -129,6 +129,10 @@ class ProjectModel(QObject):
         self._restore(self._redo.pop())
         return True
 
+    def mark_modified(self) -> None:
+        """저장되지 않은 상태로 표시(예: AI 가 만든 새 프로젝트)."""
+        self._set_dirty(True)
+
     def _set_dirty(self, v: bool) -> None:
         if v != self.dirty:
             self.dirty = v

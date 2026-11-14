@@ -217,7 +217,7 @@ class MainWindow(QMainWindow):
         return c.text if c else ""
 
     def _title(self):
-        name = self.model.path.name if self.model.path else "제목 없음"
+        name = self.model.path.name if self.model.path else getattr(self, "untitled_name", "제목 없음")
         self.setWindowTitle(f"{APP_NAME} — {name}{' *' if self.model.dirty else ''}")
 
     def _on_changed(self):
@@ -278,13 +278,26 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ 파일
     def maybe_save(self) -> bool:
+        """저장 안 한 변경이 있으면 한 번만 묻습니다(저장 / 저장 안 함 / 취소).
+        클립도 없는 제목 없는 빈 프로젝트는 묻지 않습니다."""
         if not self.model.dirty:
             return True
-        r = QMessageBox.question(self, "저장", "변경 내용을 저장할까요?",
-                                 QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        if self.model.path is None and not self.model.project.clips:
+            return True
+        box = QMessageBox(QMessageBox.Question, "저장", "현재 프로젝트의 변경 내용을 저장할까요?",
+                          QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, self)
+        box.button(QMessageBox.Save).setText("저장")
+        box.button(QMessageBox.Discard).setText("저장 안 함")
+        box.button(QMessageBox.Cancel).setText("취소")
+        box.setDefaultButton(QMessageBox.Save)
+        r = self.ask_save_changes(box)
         if r == QMessageBox.Save:
             return self.save()
         return r == QMessageBox.Discard
+
+    def ask_save_changes(self, box: QMessageBox):
+        """질문 창 표시 (테스트에서 바꿔 끼울 수 있음)."""
+        return box.exec()
 
     def closeEvent(self, ev):
         if self.dub.mode:
@@ -303,8 +316,9 @@ class MainWindow(QMainWindow):
         self.player.player.setVideoOutput(None)
         self.player.player.setSource(QUrl())
 
-    def set_project(self, project: Project, path: Optional[Path] = None):
+    def set_project(self, project: Project, path: Optional[Path] = None, untitled_name: str = "제목 없음"):
         self.dub.stop_live()
+        self.untitled_name = untitled_name
         self.model.set_project(project, path)
         self._load_preview_for_project()
 
@@ -318,20 +332,13 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _project_from_ai(self, project: Project, folder: Path):
+        """AI 프로젝트를 저장 창 없이 '저장 안 된 새 프로젝트'로 바로 엽니다. 저장은 Ctrl+S 로."""
         if not self.maybe_save():
             return
-        path = folder / "project.json"
-        if path.exists():
-            r = QMessageBox.question(self, "저장", f"{path.name} 이(가) 이미 있습니다. 덮어쓸까요?\n(아니요 = 다른 이름으로)")
-            if r != QMessageBox.Yes:
-                p, _ = QFileDialog.getSaveFileName(self, "프로젝트 저장", str(folder / "project_ai.json"), "프로젝트 (*.json)")
-                if not p:
-                    self.set_project(project, None)
-                    return
-                path = Path(p)
-        self.set_project(project, None)
-        self.model.save(path)
-        self.statusBar().showMessage(f"AI 프로젝트를 열고 {path.name} 으로 저장했습니다. F5 로 미리보기를 만드세요.", 8000)
+        project.base_dir = Path(folder)
+        self.set_project(project, None, untitled_name="AI 프로젝트")
+        self.model.mark_modified()
+        self.statusBar().showMessage("AI 프로젝트를 열었습니다. F5 로 미리보기를 만드세요. 저장하려면 Ctrl+S", 15000)
 
     def new_empty(self):
         if not self.maybe_save():
@@ -399,8 +406,10 @@ class MainWindow(QMainWindow):
         return True
 
     def save_as(self) -> bool:
-        f, _ = QFileDialog.getSaveFileName(self, "다른 이름으로 저장", str(self.model.project.base_dir / "project.json"),
-                                           "프로젝트 (*.json)")
+        # 저장된 적 없는 프로젝트는 미디어 폴더의 project.json 을 기본값으로 제안
+        default = self.model.path or (Path(self.model.project.base_dir) / "project.json")
+        title = "프로젝트 저장" if self.model.path is None else "다른 이름으로 저장"
+        f, _ = QFileDialog.getSaveFileName(self, title, str(default), "프로젝트 (*.json)")
         if not f:
             return False
         self.model.save(Path(f))
