@@ -26,6 +26,7 @@ class ImportPlan:
     projects: list[Path] = field(default_factory=list)
     unsupported: list[Path] = field(default_factory=list)
     folders: list[Path] = field(default_factory=list)
+    media_given: list[Path] = field(default_factory=list)  # 이미지/영상을 놓은(받은) 순서 그대로
 
     @property
     def empty(self) -> bool:
@@ -56,6 +57,7 @@ def classify_paths(paths: Iterable[Path | str]) -> ImportPlan:
             expanded.extend(_walk_folder(p))
         else:
             loose.append(p)
+    given = [p for p in loose if p.exists() and guess_type(p.name) in ("image", "video")]
     loose.sort(key=lambda p: natural_key(p.name))
     for p, from_folder in [(x, False) for x in loose] + [(x, True) for x in expanded]:
         ext = p.suffix.lower()
@@ -73,6 +75,7 @@ def classify_paths(paths: Iterable[Path | str]) -> ImportPlan:
                 plan.projects.append(p)
         elif not from_folder:
             plan.unsupported.append(p)
+    plan.media_given = given + [p for p in plan.media if p not in given]
     return plan
 
 

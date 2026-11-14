@@ -104,7 +104,7 @@ class ProgressDialog(QDialog):
 class FinalRenderOptions(QDialog):
     def __init__(self, default_path: Path, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("최종 렌더")
+        self.setWindowTitle("영상 내보내기")
         self.path = QLineEdit(str(default_path))
         b = QPushButton("…")
         b.clicked.connect(self._browse)
@@ -122,7 +122,7 @@ class FinalRenderOptions(QDialog):
         f.addRow("인코더", self.encoder)
         f.addRow("움직임 품질", self.quality)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        bb.button(QDialogButtonBox.Ok).setText("렌더 시작")
+        bb.button(QDialogButtonBox.Ok).setText("📤 내보내기 시작")
         bb.button(QDialogButtonBox.Cancel).setText("취소")
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)

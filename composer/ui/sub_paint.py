@@ -1,6 +1,6 @@
 """자막을 Qt 로 그리기 — 미리보기 오버레이와 '🅰 자막 스타일' 탭의 견본이 함께 씁니다.
 
-최종 렌더(libass, composer/render/ass.py)와 같은 규칙(크기·외곽선·배경 상자·위치·여백·나타나기 효과)을
+영상 내보내기(libass, composer/render/ass.py)와 같은 규칙(크기·외곽선·배경 상자·위치·여백·나타나기 효과)을
 화면 크기에 맞춰 비슷하게 흉내 냅니다. 글꼴 렌더링 차이로 몇 픽셀 다를 수 있습니다.
 """
 from __future__ import annotations

@@ -29,5 +29,6 @@ def _quiet_settings():
     s = QSettings("knhanul", "VideoComposer")
     s.setValue("view/auto_preview", False)
     s.setValue("file/recent", [])
+    s.setValue("import/skip_order_dialog", True)  # 순서 정하기 창은 tests/test_drop_order.py 에서 따로
     s.sync()
     yield

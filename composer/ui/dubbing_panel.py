@@ -19,6 +19,18 @@ from .model import ProjectModel
 from .preview import PreviewPlayer, fmt_time
 
 
+def fix_label(lab: QLabel, lines: int) -> None:
+    """글 길이와 상관없이 크기가 고정된 라벨 (넘치는 글은 잘림, 전체는 툴팁)."""
+    from PySide6.QtGui import QFontMetrics
+    from PySide6.QtWidgets import QSizePolicy
+
+    fm = QFontMetrics(lab.font())
+    lab.setFixedHeight(fm.lineSpacing() * lines + 6)
+    lab.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+    lab.setMinimumWidth(0)
+    lab.setAlignment(lab.alignment() | Qt.AlignTop) if lines > 1 else None
+
+
 class DubbingPanel(QWidget):
     status = Signal(str)
 
@@ -50,7 +62,6 @@ class DubbingPanel(QWidget):
         mid = QFont(self.font()); mid.setPointSize(12); mid.setBold(True)
         self.lbl_cur_title = QLabel("현재 자막")
         self.lbl_cur = QLabel("—"); self.lbl_cur.setFont(big); self.lbl_cur.setWordWrap(True)
-        self.lbl_cur.setMinimumHeight(56)
         self.lbl_cur_time = QLabel(""); self.lbl_cur_time.setFont(mid)
         self.bar_cur = QProgressBar(); self.bar_cur.setRange(0, 1000); self.bar_cur.setTextVisible(False)
         self.bar_cur.setMaximumHeight(10)
@@ -61,6 +72,11 @@ class DubbingPanel(QWidget):
         self.lbl_cue = QLabel(""); self.lbl_cue.setAlignment(Qt.AlignCenter)
         cuefont = QFont(self.font()); cuefont.setPointSize(26); cuefont.setBold(True)
         self.lbl_cue.setFont(cuefont)
+
+        # 자막 글이 바뀌어도 크기가 절대 변하지 않게(바뀌면 옆의 미리보기 영상이 흔들림): 줄 수만큼 고정 높이
+        for lab, lines in ((self.lbl_cur, 3), (self.lbl_cur_time, 1), (self.lbl_next, 2), (self.lbl_next_time, 1),
+                           (self.lbl_cue, 1)):
+            fix_label(lab, lines)
 
         disp = QGroupBox()
         dl = QVBoxLayout(disp)

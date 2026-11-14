@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QMimeData, QSettings, Qt, Signal
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout,
+from PySide6.QtWidgets import (QCheckBox, QAbstractItemView, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout,
                                QLabel, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QWidget)
 
 from ..schema import MOTION_LABELS, MOTIONS
@@ -74,6 +74,10 @@ class ClipList(QListWidget):
             self.order_changed.emit(order)
 
 
+def _truthy(v) -> bool:
+    return str(v).lower() in ("true", "1", "yes")
+
+
 class ClipListPanel(QWidget):
     files_dropped = Signal(list, int)
 
@@ -105,6 +109,11 @@ class ClipListPanel(QWidget):
         self.image_motion.setCurrentIndex(max(0, i))
         f.addRow("이미지 표시 시간", self.image_duration)
         f.addRow("이미지 움직임", self.image_motion)
+        self.skip_order = QCheckBox("여러 파일을 넣을 때 '순서 정하기'를 묻지 않고 이름순")
+        self.skip_order.setToolTip("끄면 이미지·영상을 2개 이상 넣을 때 썸네일을 클릭해 순서를 정하는 창이 뜹니다")
+        self.skip_order.setChecked(_truthy(self.settings.value("import/skip_order_dialog", False)))
+        self.skip_order.toggled.connect(lambda v: self.settings.setValue("import/skip_order_dialog", bool(v)))
+        f.addRow("", self.skip_order)
         self.image_duration.valueChanged.connect(lambda v: self.settings.setValue("import/image_duration", v))
         self.image_motion.currentIndexChanged.connect(
             lambda _: self.settings.setValue("import/image_motion", self.image_motion.currentData()))

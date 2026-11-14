@@ -10,6 +10,7 @@ pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 from composer.importer import classify_paths, describe_unsupported, insert_media, natural_key  # noqa: E402
 from composer.schema import Project  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 
 def _touch(folder: Path, *names):
@@ -107,6 +108,7 @@ def test_drop_on_empty_window_sets_folder_and_appends(win, tmp_path):
     imgs = [tmp_path / "img2.jpg", tmp_path / "img1.png", tmp_path / "vid1.mp4"]
     _, _, drop = _events(10, 10, _mime(imgs))
     win.dropEvent(drop)
+    QApplication.processEvents()  # 드롭 처리는 이벤트가 끝난 뒤
     assert drop.isAccepted()
     p = win.model.project
     assert p.base_dir == tmp_path
@@ -131,6 +133,7 @@ def test_timeline_drop_inserts_at_position_with_indicator_and_undo(win, tmp_path
     canvas.dragMoveEvent(move)
     canvas.grab()  # 표시선 그리기
     canvas.dropEvent(drop)
+    QApplication.processEvents()  # 드롭 처리는 이벤트가 끝난 뒤
     assert canvas.drop_hint is None
     files = [c.file for c in win.model.project.clips]
     assert files == ["img1.png", "new9.png", "new10.png", "img2.jpg"]
@@ -216,4 +219,5 @@ def test_clip_list_reorder_and_external_drop(win, tmp_path):
     rect = lst.visualItemRect(lst.item(1))
     _, _, drop = _events(rect.center().x(), rect.top() + 1, _mime(new))
     lst.dropEvent(drop)
+    QApplication.processEvents()  # 드롭 처리는 이벤트가 끝난 뒤
     assert [c.file for c in win.model.project.clips][1] == "z.png"

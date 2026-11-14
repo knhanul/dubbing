@@ -1,4 +1,4 @@
-"""자막 → ASS(Advanced SubStation Alpha) 파일 생성. 최종 렌더에서 libass 로 영상에 새깁니다.
+"""자막 → ASS(Advanced SubStation Alpha) 파일 생성. 영상 내보내기에서 libass 로 영상에 새깁니다.
 
 * 좌표계(PlayResX/Y)는 출력 크기 그대로라 글자 크기·여백이 픽셀 값과 같습니다(초안 렌더는 libass 가 비율대로 축소).
 * 배경 상자는 별도 층(Layer 0, BorderStyle=3)으로 그려서 글자 외곽선 색과 상자 색을 따로 쓸 수 있습니다.

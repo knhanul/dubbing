@@ -9,7 +9,7 @@ from typing import Optional
 
 from PySide6.QtCore import QEvent, QObject, QSettings, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import (QAbstractSpinBox, QApplication, QComboBox, QFileDialog, QLineEdit, QMainWindow,
+from PySide6.QtWidgets import (QScrollArea, QSizePolicy, QAbstractSpinBox, QApplication, QComboBox, QFileDialog, QLineEdit, QMainWindow,
                                QMessageBox, QPlainTextEdit, QSplitter, QTabWidget, QTextEdit, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
@@ -69,7 +69,14 @@ class MainWindow(QMainWindow):
 
         self.clip_panel = ClipListPanel(self.model)
         self.right = QTabWidget()
-        self.right.addTab(self.dub, "🎤 더빙 / 자막")
+        # 오른쪽 패널 내용(자막 글 길이 등)이 바뀌어도 위쪽 영역 높이·미리보기 크기에 영향 주지 않게
+        self.right.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Ignored)
+        self.right.setMinimumWidth(320)
+        self.dub_scroll = QScrollArea()  # 창이 낮아도 더빙 패널이 찌그러지지 않게 (스크롤)
+        self.dub_scroll.setWidgetResizable(True)
+        self.dub_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.dub_scroll.setWidget(self.dub)
+        self.right.addTab(self.dub_scroll, "🎤 더빙 / 자막")
         self.right.addTab(self.inspector, "🛠 미세 조정")
         self.right.addTab(self.clip_panel, "🎞 클립 목록")
         self.style_panel = SubtitleStylePanel(self.model)
@@ -82,13 +89,14 @@ class MainWindow(QMainWindow):
         main = QSplitter(Qt.Vertical)
         main.addWidget(top)
         main.addWidget(self.timeline)
-        main.setSizes([650, 260])
+        main.setSizes([700, 230])
         self.setCentralWidget(main)
 
         self.player.position_changed.connect(self.timeline.set_playhead)
         self.timeline.canvas.seek_requested.connect(self.player.seek)
-        self.timeline.canvas.files_dropped.connect(self.handle_drop)
-        self.clip_panel.files_dropped.connect(self.handle_drop)
+        # 드롭 이벤트가 끝난 뒤 처리(드롭 중에 창을 띄우면 Windows 탐색기 끌기가 멈춤)
+        self.timeline.canvas.files_dropped.connect(lambda paths, idx: self._drop_later(paths, idx))
+        self.clip_panel.files_dropped.connect(lambda paths, idx: self._drop_later(paths, idx))
         # 탐색기에서 창 어디에 놓아도 받기 (미리보기 화면은 부모 창으로 넘김)
         self.setAcceptDrops(True)
         self.player.view.setAcceptDrops(False)
@@ -144,6 +152,15 @@ class MainWindow(QMainWindow):
         self._act(f, "저장", self.save, "Ctrl+S")
         self._act(f, "다른 이름으로 저장…", self.save_as, "Ctrl+Shift+S")
         f.addSeparator()
+        # 같은 QAction 을 파일/내보내기 메뉴에 함께 넣음(단축키가 겹치지 않게)
+        self.act_export = QAction("📤 영상 내보내기…", self)
+        self.act_export.setShortcut("Ctrl+E")
+        self.act_export.triggered.connect(self.render_final)
+        self.act_export_voice = QAction("목소리만 WAV로 내보내기…", self)
+        self.act_export_voice.triggered.connect(self.export_voice)
+        f.addAction(self.act_export)
+        f.addAction(self.act_export_voice)
+        f.addSeparator()
         self._act(f, "AI 로 구성하기…", self.open_prompt_dialog, "Ctrl+Shift+A")
         self._act(f, "동영상 + 자막으로 더빙 시작…", self.open_video_for_dubbing, "Ctrl+Shift+O")
         f.addSeparator()
@@ -172,12 +189,14 @@ class MainWindow(QMainWindow):
         self.act_auto.toggled.connect(self._on_auto_toggled)
         v.addAction(self.act_auto)
 
-        r = mb.addMenu("렌더(&R)")
-        self._act(r, "🔄 미리보기 새로 만들기 (360p)", self.render_preview, "F5")
-        self._act(r, "최종 렌더 (MP4)…", self.render_final, "Ctrl+E")
-        self._act(r, "목소리만 WAV 로 내보내기…", self.export_voice)
+        v.addSeparator()
+        self._act(v, "🔄 미리보기 새로 만들기 (360p)", self.render_preview, "F5")
+
+        r = mb.addMenu("내보내기(&X)")
+        r.addAction(self.act_export)
+        r.addAction(self.act_export_voice)
         r.addSeparator()
-        self._act(r, "렌더 캐시 비우기", self.clear_cache)
+        self._act(r, "캐시 비우기 (미리보기·내보내기 중간 파일)", self.clear_cache)
 
         h = mb.addMenu("도움말(&H)")
         self._act(h, "단축키", self.show_shortcuts, "F1")
@@ -187,7 +206,7 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         for text, slot in [("🤖 AI 로 구성하기", self.open_prompt_dialog), ("📂 열기", self.open_project),
                            ("💾 저장", self.save), ("➕ 클립", self.add_clips),
-                           ("🎬 최종 렌더", self.render_final)]:
+                           ("📤 내보내기", self.render_final)]:
             a = QAction(text, self)
             a.triggered.connect(slot)
             tb.addAction(a)
@@ -197,7 +216,7 @@ class MainWindow(QMainWindow):
             "Space : 재생 / 일시정지 (미리보기가 없거나 만드는 중이면 타임라인 시간으로 재생)", "R : 선택한 자막 줄 녹음 (녹음 중이면 정지)", "Shift+R : 연속 녹음 시작/정지",
             "← / → : 이전 / 다음 자막 줄", "Ctrl+← / → : 0.1초 뒤로/앞으로 (Shift 를 더하면 1초)",
             "[ / ] : 선택한 자막·테이크를 0.1초 앞당기기/늦추기 (Shift = 0.01초)",
-            "Delete : 선택한 클립 / 자막 줄 삭제", "Home : 처음으로", "F5 : 미리보기 새로 만들기 (보통은 자동)", "Ctrl+E : 최종 렌더", "Ctrl+Z / Ctrl+Y : 실행 취소 / 다시 실행",
+            "Delete : 선택한 클립 / 자막 줄 삭제", "Home : 처음으로", "F5 : 미리보기 새로 만들기 (보통은 자동)", "Ctrl+E : 영상 내보내기", "Ctrl+Z / Ctrl+Y : 실행 취소 / 다시 실행",
             "Ctrl+S : 저장", "타임라인: 끌어서 이동, 끝을 끌어서 길이, Shift 끌기 = 0.01초, Ctrl+휠 = 확대",
         ]))
 
@@ -605,7 +624,7 @@ class MainWindow(QMainWindow):
             p.subtitle = SubtitleSettings(file=_rel(p, s))
         p.dubbing.folder = f"{vp.stem}_takes"
         self.set_project(p, None)
-        self.right.setCurrentWidget(self.dub)
+        self.right.setCurrentWidget(self.dub_scroll)
         self.dub.ensure_devices()
         self.model.save(vp.parent / f"{vp.stem}_dubbing.json")
 
@@ -651,7 +670,8 @@ class MainWindow(QMainWindow):
         return True
 
     def add_clips(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "클립 추가", str(self.model.project.base_dir), MEDIA_FILTER)
+        files, _ = QFileDialog.getOpenFileNames(self, "클립 추가 (여러 개 선택 가능 — 다음 창에서 순서를 정함)",
+                                                str(self.model.project.base_dir), MEDIA_FILTER)
         if files:
             self.handle_drop([Path(f) for f in files], None)
 
@@ -671,7 +691,10 @@ class MainWindow(QMainWindow):
         if paths:
             ev.setDropAction(Qt.CopyAction)
             ev.accept()
-            self.handle_drop(paths, None)
+            self._drop_later(paths, None)
+
+    def _drop_later(self, paths, index):
+        QTimer.singleShot(0, lambda: self.handle_drop(list(paths), index))
 
     def confirm(self, title: str, text: str) -> bool:
         """예/아니요 질문 (테스트에서 바꿔 끼울 수 있음)."""
@@ -682,6 +705,18 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(text.split("\n")[0], 8000)
         if warning:
             QMessageBox.information(self, "가져오기", text)
+
+    def ask_media_order(self, files: list, dropped: list):
+        """'순서 정하기' 창. 정한 순서(list[Path]) 또는 취소면 None. (테스트에서 바꿔 끼울 수 있음)"""
+        from .order_dialog import OrderDialog
+
+        dlg = OrderDialog(files, dropped, self)
+        ok = dlg.exec() == OrderDialog.Accepted
+        if ok and dlg.skip_next.isChecked():
+            self.clip_panel.skip_order.setChecked(True)
+        order = dlg.result_order if ok else None
+        dlg.deleteLater()
+        return order
 
     def handle_drop(self, paths: list, index: Optional[int] = None) -> None:
         """탐색기에서 끌어온 파일/폴더 처리. index 는 클립 삽입 위치(None = 끝에 추가)."""
@@ -709,6 +744,12 @@ class MainWindow(QMainWindow):
             if base is not None:
                 p.base_dir = base
         changed = False
+        if len(plan.media) >= 2 and not self.clip_panel.skip_order.isChecked():
+            order = self.ask_media_order(plan.media, plan.media_given)
+            if order is None:
+                self.statusBar().showMessage("넣기를 취소했습니다", 4000)
+                return
+            plan.media = order
         if plan.media:
             inserted = insert_media(p, plan.media, index, self.clip_panel.image_duration.value(),
                                     self.clip_panel.image_motion.currentData())
@@ -755,12 +796,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ 렌더
     def _check_renderable(self) -> bool:
         if not self.model.project.clips:
-            QMessageBox.information(self, "렌더", "클립이 없습니다.")
+            QMessageBox.information(self, "내보내기", "클립이 없습니다. 이미지·동영상을 먼저 넣으세요.")
             return False
         issues = [i for i in validate_project(self.model.project.to_dict(), self.model.project.base_dir)
                   if i.severity == "error"]
         if issues:
-            QMessageBox.warning(self, "렌더할 수 없습니다", "\n".join(map(str, issues[:20])))
+            QMessageBox.warning(self, "아직 만들 수 없습니다", "\n".join(map(str, issues[:20])))
             return False
         return True
 
@@ -855,10 +896,10 @@ class MainWindow(QMainWindow):
             return
         out = Path(opt.path.text())
         worker = RenderWorker(self.model.project, out, opt.settings())
-        dlg = ProgressDialog(worker, "최종 렌더", self)
+        dlg = ProgressDialog(worker, "영상 내보내기", self)
         if dlg.exec_worker():
             res = dlg.result_obj
-            r = QMessageBox.question(self, "완료", f"렌더 완료!\n{out}\n길이 {res.duration:.2f}초 · 새로 만든 클립 "
+            r = QMessageBox.question(self, "내보내기 완료", f"내보내기 완료!\n{out}\n길이 {res.duration:.2f}초 · 새로 만든 클립 "
                                                    f"{res.clips_rendered}개 · 캐시 사용 {res.clips_cached}개\n\n폴더를 열까요?")
             if r == QMessageBox.Yes:
                 open_folder(out.parent)
@@ -867,11 +908,11 @@ class MainWindow(QMainWindow):
         if not self.model.project.dubbing.takes:
             QMessageBox.information(self, "내보내기", "녹음된 테이크가 없습니다.")
             return
-        f, _ = QFileDialog.getSaveFileName(self, "목소리 WAV", str(self.model.project.base_dir / "voice.wav"), "WAV (*.wav)")
+        f, _ = QFileDialog.getSaveFileName(self, "목소리만 WAV로 내보내기", str(self.model.project.base_dir / "voice.wav"), "WAV (*.wav)")
         if not f:
             return
         worker = RenderWorker(self.model.project, Path(f), RenderSettings(), kind="voice")
-        if ProgressDialog(worker, "목소리 내보내기", self).exec_worker():
+        if ProgressDialog(worker, "목소리만 WAV로 내보내기", self).exec_worker():
             self.statusBar().showMessage(f"저장됨: {f}", 5000)
 
     def clear_cache(self):
