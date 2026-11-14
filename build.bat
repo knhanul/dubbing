@@ -19,6 +19,10 @@ if errorlevel 1 goto :fail
     --collect-data docx ^
     --collect-all _sounddevice_data ^
     --collect-all _soundfile_data ^
+    --collect-all faster_whisper ^
+    --collect-all ctranslate2 ^
+    --collect-all onnxruntime ^
+    --collect-data tokenizers ^
     --add-data "schema;schema" ^
     --add-data "examples;examples" ^
     run_app.py

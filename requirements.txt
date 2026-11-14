@@ -4,3 +4,4 @@ sounddevice>=0.4.6
 soundfile>=0.12
 imageio-ffmpeg>=0.5
 python-docx>=1.1
+faster-whisper>=1.0  # 더빙으로 자막 만들기(음성 인식). 없으면 무음 감지로만 동작

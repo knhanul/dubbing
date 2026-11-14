@@ -130,11 +130,26 @@ class DubbingPanel(QWidget):
         for i in (0, 1, 2, 3, 5):
             hh.setSectionResizeMode(i, QHeaderView.ResizeToContents)
 
+        # 두 가지 녹음 방법: 자막 따라 녹음 / 자유 녹음(대본 먼저 → 녹음으로 자막 만들기)
+        from PySide6.QtWidgets import QTabWidget
+        from .free_record import FreeRecordPage
+        follow = QWidget()
+        fl = QVBoxLayout(follow)
+        fl.setContentsMargins(0, 0, 0, 0)
+        fl.addWidget(disp)
+        fl.addLayout(rb)
+        fl.addLayout(pb)
+        fl.addWidget(self.table, 1)
+        self.free_page = FreeRecordPage(self)
+        self.free_page.status.connect(self.status.emit)
+        self.mode_tabs = QTabWidget()
+        self.mode_tabs.addTab(follow, "🎤 자막 따라 녹음")
+        self.mode_tabs.addTab(self.free_page, "🎙 자유 녹음 (대본 먼저)")
+        self.mode_tabs.setTabToolTip(0, "이미 있는 자막 시간에 맞춰 한 줄씩 녹음")
+        self.mode_tabs.setTabToolTip(1, "대본을 보며 편하게 녹음한 뒤, 녹음에 맞춰 자막(SRT)을 자동으로 만들기")
+
         lay = QVBoxLayout(self)
-        lay.addWidget(disp)
-        lay.addLayout(rb)
-        lay.addLayout(pb)
-        lay.addWidget(self.table, 1)
+        lay.addWidget(self.mode_tabs, 1)
         lay.addWidget(g)
 
         self.btn_rec.clicked.connect(self.record_line)
@@ -399,6 +414,28 @@ class DubbingPanel(QWidget):
         self.player.set_notice("● 연속 녹음 중 (Shift+R 로 끝내기)")
         self.status.emit("연속 녹음 중…")
 
+    def start_free_recording(self, play_video: bool = True):
+        """자유 녹음: 자막과 상관없이 지금 재생 위치부터 녹음 (영상 재생은 선택)."""
+        if self.mode:
+            return
+        if self.model.project.tracks.dubbing.locked:
+            self.status.emit("🔒 더빙 트랙이 잠겨 있습니다.")
+            return
+        if not self._check_recorder():
+            return
+        self.stop_live()
+        p0 = self.player.position()
+        rel, path = next_take_path(self.model.project, None)
+        self.mode, self.rec_cue, self.rec_rel, self.rec_offset = "free", None, rel, p0
+        self._rec_p0, self._sync = p0, []
+        self._free_played = play_video
+        self.player.set_volume_factor(self.rec_vol.value() / 100.0)
+        self.recorder.start(path)
+        if play_video:
+            self.player.play()
+        self.player.set_notice("● 자유 녹음 중 — 대본을 편하게 읽으세요")
+        self.status.emit(f"자유 녹음 중… ({fmt_time(p0)}부터)")
+
     def stop_recording(self):
         if not self.mode:
             self.player.pause()
@@ -410,6 +447,8 @@ class DubbingPanel(QWidget):
         mode, cue = self.mode, self.rec_cue
         self.mode = None
         if length < 0.05:
+            if mode == "free":
+                self.free_page.recording_stopped()
             self.status.emit("녹음된 소리가 없습니다.")
             return
         idx = cue.index if cue else None
@@ -427,6 +466,10 @@ class DubbingPanel(QWidget):
         else:
             ti = len(self.model.project.dubbing.takes) - 1
             self.model.select("take", ti)
+        if mode == "free":
+            if not getattr(self, "_free_played", True):  # 영상 없이 녹음했으면 다음 녹음은 이어서
+                self.player.seek(self.rec_offset + length)
+            self.free_page.recording_stopped()
 
     def play_take(self, take_index: int, with_video: bool):
         takes = self.model.project.dubbing.takes
