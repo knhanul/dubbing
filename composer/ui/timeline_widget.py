@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QLabel, QScrollArea, QToolButton, QToolTip, QWidget
 
 from ..schema import MOTION_LABELS
@@ -53,6 +53,7 @@ class TimelineCanvas(QWidget):
         self.setMouseTracking(True)
         self.setMinimumHeight(RULER_H + sum(t[2] for t in TRACKS) + 8)
         self._drag: Optional[dict] = None
+        self._hover: Optional[Hit] = None  # 마우스가 올라간 가장자리(강조 표시)
         self.empty_hint = ""  # 클립이 없을 때 가운데 안내
         self.drop_hint: Optional[dict] = None  # 드롭 위치 표시 {"index": n, "x": px, "text": str}
         self.setAcceptDrops(True)
@@ -125,17 +126,24 @@ class TimelineCanvas(QWidget):
             return 1.0
 
     def hit_test(self, pos: QPointF) -> Optional[Hit]:
-        found = None
+        """가장자리(길이 조절)를 몸통보다 먼저 봅니다 — 전환으로 겹친 클립도 앞 클립 끝을 잡을 수 있게.
+        가장자리가 여럿이면 마우스에 가장 가까운 것, 몸통은 나중 항목(위에 그려진 것) 우선."""
+        body, edges = None, []
+        x = pos.x()
         for kind, idx, rect in self._items():
+            if not (rect.top() <= pos.y() <= rect.bottom()):
+                continue
+            if kind in ("clip", "subtitle"):
+                ew = min(EDGE, max(2.0, rect.width() / 3))  # 아주 짧은 막대는 가운데를 몸통으로 남김
+                if rect.right() - ew <= x <= rect.right() + 3:
+                    edges.append((abs(x - rect.right()), Hit(kind, idx, "right")))
+                if rect.left() - 3 <= x <= rect.left() + ew:
+                    edges.append((abs(x - rect.left()), Hit(kind, idx, "left")))
             if rect.adjusted(-2, 0, 2, 0).contains(pos):
-                part = "body"
-                if kind in ("clip", "subtitle"):
-                    if pos.x() >= rect.right() - EDGE:
-                        part = "right"
-                    elif kind == "subtitle" and pos.x() <= rect.left() + EDGE:
-                        part = "left"
-                found = Hit(kind, idx, part)  # 나중 항목(위에 그려진 것) 우선
-        return found
+                body = Hit(kind, idx, "body")
+        if edges:
+            return min(edges, key=lambda e: e[0])[1]
+        return body
 
     # --- 그리기 ---
     def paintEvent(self, ev):
@@ -210,6 +218,21 @@ class TimelineCanvas(QWidget):
             p.drawText(rect.adjusted(5, 2, -3, -2), Qt.AlignLeft | Qt.AlignVCenter, text)
             p.restore()
         p.setOpacity(1.0)
+        self._paint_overlaps(p, colors)
+        if self._hover is not None:  # 잡을 수 있는 가장자리 강조
+            for kind, idx, rect in self._items():
+                if kind == self._hover.kind and idx == self._hover.index:
+                    x = rect.right() if self._hover.part == "right" else rect.left()
+                    p.setPen(QPen(QColor("#ffd54f"), 3))
+                    p.drawLine(QPointF(x, rect.top() - 2), QPointF(x, rect.bottom() + 2))
+                    p.setBrush(QColor("#ffd54f"))
+                    p.setPen(Qt.NoPen)
+                    my = rect.center().y()
+                    for sgn in (-1, 1):  # ◀▶ 작은 화살표
+                        tip = x + sgn * 7
+                        p.drawPolygon(QPolygonF([QPointF(tip, my), QPointF(tip - sgn * 4, my - 4),
+                                                 QPointF(tip - sgn * 4, my + 4)]))
+                    break
 
         if self.empty_hint and not self.model.project.clips:
             f3 = QFont(self.font())
@@ -249,6 +272,41 @@ class TimelineCanvas(QWidget):
         p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
         p.end()
 
+    def _paint_overlaps(self, p: QPainter, colors: dict):
+        """전환으로 겹친 구간: 위 절반 = 앞 클립, 아래 절반 = 뒤 클립. 앞 클립 끝선·뒤 클립 시작선을 또렷이."""
+        m = self.model
+        tl = m.timeline.clips
+        rects = {idx: rect for kind, idx, rect in self._items() if kind == "clip"}
+        pr = m.project
+        p.setOpacity(0.32 if dimmed(pr, KIND_TRACK["clip"]) else 1.0)
+        for i in range(1, len(tl)):
+            tr = tl[i].transition_in.duration
+            if tr <= 0 or i not in rects or i - 1 not in rects:
+                continue
+            a, b = rects[i - 1], rects[i]
+            ov = QRectF(b.left(), b.top(), max(1.0, a.right() - b.left()), b.height())
+            if ov.width() <= 1:
+                continue
+            prev_col = QColor("#4b7f9c") if pr.clips[i - 1].type == "image" else QColor(colors["clip"])
+            if m.selection.kind == "clip" and m.selection.index == i - 1:
+                prev_col = prev_col.lighter(135)
+            top = QRectF(ov.left(), ov.top(), ov.width(), ov.height() / 2)
+            p.fillRect(top, prev_col)
+            p.fillRect(top, QBrush(QColor(255, 255, 255, 40), Qt.BDiagPattern))
+            p.setPen(QPen(QColor(255, 255, 255, 120), 1, Qt.DashLine))
+            p.drawLine(QPointF(ov.left(), ov.center().y()), QPointF(ov.right(), ov.center().y()))
+            p.setPen(QPen(QColor("#ffffff"), 2))  # 앞 클립 끝선(여기를 잡으면 앞 클립 길이)
+            p.drawLine(QPointF(a.right(), a.top()), QPointF(a.right(), ov.center().y()))
+            p.setPen(QPen(QColor("#e8eaed"), 2))  # 뒤 클립 시작선
+            p.drawLine(QPointF(b.left(), ov.center().y()), QPointF(b.left(), b.bottom()))
+            if ov.width() > 34:
+                f = QFont(self.font()); f.setPointSizeF(7.5)
+                p.setFont(f)
+                p.setPen(QColor("#ffffff"))
+                p.drawText(QRectF(ov.left(), ov.center().y(), ov.width(), ov.height() / 2), Qt.AlignCenter,
+                           f"⇄ {tr:.1f}초")
+        p.setOpacity(1.0)
+
     # --- 마우스 ---
     def mousePressEvent(self, ev):
         pos = ev.position()
@@ -278,7 +336,8 @@ class TimelineCanvas(QWidget):
             return {"duration": c.duration, "fit_duration": c.fit_duration, "trim_end": c.trim_end,
                     "out": self.model.timeline.clips[hit.index].duration,
                     "speed": self.model.timeline.clips[hit.index].speed,
-                    "src_out": self.model.timeline.clips[hit.index].source_out}
+                    "src_out": self.model.timeline.clips[hit.index].source_out,
+                    "src_in": self.model.timeline.clips[hit.index].source_in}
         if hit.kind == "subtitle":
             items = ensure_items(pr)
             it = next(i for i in items if i.index == hit.index)
@@ -294,8 +353,11 @@ class TimelineCanvas(QWidget):
         d = self._drag
         if d is None:
             hit = self.hit_test(pos)
-            self.setCursor(Qt.SizeHorCursor if hit and hit.part in ("left", "right") else
-                           Qt.OpenHandCursor if hit else Qt.ArrowCursor)
+            edge = hit if hit and hit.part in ("left", "right") and not locked(self.model.project, hit.kind) else None
+            self.setCursor(Qt.SizeHorCursor if edge else Qt.OpenHandCursor if hit else Qt.ArrowCursor)
+            if edge != self._hover:
+                self._hover = edge
+                self.update()
             return
         if d["kind"] == "seek":
             self.seek_requested.emit(self.t_of(pos.x()))
@@ -324,6 +386,23 @@ class TimelineCanvas(QWidget):
             else:
                 c.trim_end = round(max(c.trim_start + 0.1, o["src_out"] + (new_out - o["out"]) * o["speed"]), 3)
             tip = f"길이 {new_out:.2f}초"
+        elif k == "clip" and d["part"] == "left":
+            # 프리미어처럼 왼쪽 끝 잡기: 동영상 = 시작 부분 자르기/되살리기, 이미지 = 길이
+            c = pr.clips[d["index"]]
+            new_out = max(0.1, snap(o["out"] - dt, fine))
+            if c.type == "image" or c.fit_duration:
+                if c.type == "image" and not c.fit_duration:
+                    c.duration = new_out
+                else:
+                    c.fit_duration = new_out
+                tip = f"길이 {new_out:.2f}초"
+            else:
+                src_in = o["src_in"] + (o["out"] - new_out) * o["speed"]
+                src_in = round(min(max(0.0, src_in), o["src_out"] - 0.1 * o["speed"]), 3)
+                c.trim_start = src_in
+                tip = f"시작 자르기 {src_in:.2f}초 · 길이 {(o['src_out'] - src_in) / o['speed']:.2f}초"
+                if src_in <= 0.0 and o["out"] - dt > o["out"] + o["src_in"] / o["speed"] + 1e-3:
+                    tip += " (원본 처음까지)"
         elif k == "clip":
             self.setCursor(Qt.ClosedHandCursor)
             d["drop_x"] = pos.x()
@@ -346,10 +425,31 @@ class TimelineCanvas(QWidget):
         elif k == "bgm":
             pr.bgm.start_offset = max(0.0, snap(o["start"] + dt, fine))
             tip = f"시작 {pr.bgm.start_offset:.2f}초"
-        if k != "clip" or d["part"] == "right":
+        if k != "clip" or d["part"] in ("left", "right"):
             self.model.recompute()
+            if k == "clip":
+                tip += self._transition_note(d["index"])
         QToolTip.showText(ev.globalPosition().toPoint(), tip, self)
         self.update()
+
+    def _transition_note(self, i: int) -> str:
+        """전환은 앞뒤 클립 중 짧은 쪽의 절반까지만(자동 제한) — 줄었으면 알려 줌."""
+        from ..timeline import effective_transition
+        tl = self.model.timeline.clips
+        notes = []
+        for j in (i, i + 1):
+            if 0 < j < len(tl):
+                want = effective_transition(self.model.project, j).duration
+                got = tl[j].transition_in.duration
+                if want > got + 1e-3:
+                    notes.append(f"전환 {want:.2f}→{got:.2f}초로 자동 줄임")
+        return ("\n" + " · ".join(notes)) if notes else ""
+
+    def leaveEvent(self, ev):
+        if self._hover is not None:
+            self._hover = None
+            self.update()
+        super().leaveEvent(ev)
 
     def mouseReleaseEvent(self, ev):
         d, self._drag = self._drag, None
