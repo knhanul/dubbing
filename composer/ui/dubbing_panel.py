@@ -13,7 +13,9 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleS
                                QHBoxLayout, QHeaderView, QLabel, QMessageBox, QProgressBar, QPushButton, QSpinBox,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
+from ..dubbing.levels import SILENCE_WARN_S, SILENCE_WARNING
 from ..dubbing.recorder import Recorder, RecorderUnavailable, list_input_devices
+from .level_widgets import MicStrip
 from ..dubbing.takes import find_take, next_take_path, set_take
 from .model import ProjectModel
 from .preview import PreviewPlayer, fmt_time
@@ -95,23 +97,27 @@ class DubbingPanel(QWidget):
         rb = QHBoxLayout()
         for b in (self.btn_rec, self.btn_session, self.btn_stop):
             rb.addWidget(b)
+        self.strip = MicStrip()  # 입력 소리: ● REC · 레벨 미터 · 흘러가는 파형 · 무음 경고
         pb = QHBoxLayout(); pb.addWidget(self.btn_play); pb.addWidget(self.btn_play_v)
 
         # --- 설정 ---
         g = QGroupBox("녹음 설정")
         f = QFormLayout(g)
         self.dev = QComboBox()
-        self.btn_dev = QPushButton("새로고침")
-        dr = QHBoxLayout(); dr.addWidget(self.dev, 1); dr.addWidget(self.btn_dev)
-        self.meter = QProgressBar(); self.meter.setRange(-60, 0); self.meter.setFormat("%v dB"); self.meter.setMaximumHeight(16); self.meter.setValue(-60)
+        self.dev.setToolTip("녹음할 마이크. ★ = Windows 기본 장치")
+        self.dev.setMinimumHeight(26)
+        self.btn_dev = QPushButton("🔄 장치 새로고침")
+        self.btn_test = QPushButton("🎧 마이크 테스트")
+        self.btn_test.setCheckable(True)
+        self.btn_test.setToolTip("녹음하지 않고 마이크 소리 크기만 봅니다(위 미터와 파형)")
+        dr = QHBoxLayout(); dr.addWidget(self.dev, 1); dr.addWidget(self.btn_dev); dr.addWidget(self.btn_test)
         self.preroll = QDoubleSpinBox(); self.preroll.setRange(0, 10); self.preroll.setValue(2.0); self.preroll.setSuffix(" 초"); self.preroll.setSingleStep(0.5)
         self.postroll = QDoubleSpinBox(); self.postroll.setRange(0, 10); self.postroll.setValue(0.5); self.postroll.setSuffix(" 초"); self.postroll.setSingleStep(0.1)
         self.rec_vol = QSpinBox(); self.rec_vol.setRange(0, 100); self.rec_vol.setValue(20); self.rec_vol.setSuffix(" %")
         self.rec_vol.setToolTip("녹음하는 동안 원본 소리 크기 (0 = 음소거)")
         self.auto_next = QCheckBox("녹음 후 다음 줄로 자동 이동"); self.auto_next.setChecked(True)
         self.live = QCheckBox("재생할 때 녹음한 목소리 함께 듣기"); self.live.setChecked(True)
-        f.addRow("마이크", dr)
-        f.addRow("입력 레벨", self.meter)
+        f.addRow("🎤 입력 장치(마이크)", dr)
         f.addRow("미리 재생(프리롤)", self.preroll)
         f.addRow("끝난 뒤 여유", self.postroll)
         f.addRow("녹음 중 원본 소리", self.rec_vol)
@@ -138,6 +144,7 @@ class DubbingPanel(QWidget):
         fl.setContentsMargins(0, 0, 0, 0)
         fl.addWidget(disp)
         fl.addLayout(rb)
+        fl.addWidget(self.strip)
         fl.addLayout(pb)
         fl.addWidget(self.table, 1)
         self.free_page = FreeRecordPage(self)
@@ -158,6 +165,7 @@ class DubbingPanel(QWidget):
         self.btn_play.clicked.connect(lambda: self.play_selected(False))
         self.btn_play_v.clicked.connect(lambda: self.play_selected(True))
         self.btn_dev.clicked.connect(self.refresh_devices)
+        self.btn_test.toggled.connect(self.set_monitoring)
         self.dev.currentIndexChanged.connect(self._device_changed)
         self.table.itemSelectionChanged.connect(self._table_selected)
         self.table.cellDoubleClicked.connect(lambda r, c: self._seek_row(r))
@@ -165,7 +173,9 @@ class DubbingPanel(QWidget):
         model.changed.connect(self.refresh_table)
         model.selection_changed.connect(self._sync_selection)
         self.meter_timer = QTimer(self)
-        self.meter_timer.setInterval(50)
+        self.strips = [self.strip, self.free_page.strip]
+        self._warned = False
+        self.meter_timer.setInterval(33)  # 약 30fps
         self.meter_timer.timeout.connect(self._meter)
         self.meter_timer.start()
         self._devices_loaded = False
@@ -208,9 +218,41 @@ class DubbingPanel(QWidget):
         except Exception as e:  # noqa: BLE001
             self.status.emit(f"마이크를 열 수 없습니다: {e}")
 
+    def set_monitoring(self, on: bool):
+        """🎧 마이크 테스트: 녹음 없이 소리 크기만 보기 / 끄기."""
+        if on:
+            self.ensure_devices()
+            if not self.recorder.is_open:
+                try:
+                    self.recorder.open(self.dev.currentData())
+                except Exception as e:  # noqa: BLE001
+                    self.status.emit(f"마이크를 열 수 없습니다: {e}")
+            if self.recorder.is_open:
+                self.status.emit("🎧 마이크 테스트 중 — 말해 보세요. 초록~노랑이면 좋아요")
+        elif not self.mode:
+            self.recorder.close()
+        self._meter()
+
     def _meter(self):
-        if self.recorder.is_open:
-            self.meter.setValue(int(max(-60, min(0, self.recorder.level_db))))
+        """녹음 콜백이 쌓아 둔 레벨/파형을 화면 스레드에서 꺼내 그립니다(약 30fps)."""
+        r = self.recorder
+        snap = r.tap.snapshot()
+        wave = r.tap.take_wave()
+        rec = bool(self.mode) and r.is_recording
+        warn = rec and snap["silent_s"] >= SILENCE_WARN_S
+        if warn and not self._warned:
+            self._warned = True
+            self.status.emit("⚠ " + SILENCE_WARNING)
+        if not rec:
+            self._warned = False
+        dev = self.dev.currentText() if r.is_open else ""
+        for s in self.strips:
+            s.update_levels(snap, wave, is_open=r.is_open, recording=rec,
+                            elapsed=r.recorded_seconds if rec else 0.0, warn=warn, device=dev)
+        self.btn_test.blockSignals(True)
+        self.btn_test.setChecked(r.is_open)
+        self.btn_test.blockSignals(False)
+        self.btn_test.setEnabled(not self.mode)
 
     # --- 자막 목록 ---
     def refresh_table(self):

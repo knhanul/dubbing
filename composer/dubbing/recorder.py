@@ -12,6 +12,8 @@ from typing import Optional
 
 import numpy as np
 
+from .levels import LevelTap
+
 
 class RecorderUnavailable(RuntimeError):
     pass
@@ -74,6 +76,7 @@ class Recorder:
         self.channels = channels
         self.device: Optional[int] = None
         self.level_db = -90.0
+        self.tap = LevelTap(samplerate)  # 화면용 레벨·파형 (스레드 안전)
         self._stream = None
         self._file = None
         self._lock = threading.Lock()
@@ -84,6 +87,10 @@ class Recorder:
     # --- 스트림 ---
     def _callback(self, indata, frames, time_info, status):
         self.level_db = max(peak_db(indata), self.level_db - 1.5)  # 완만하게 떨어지는 미터
+        try:
+            self.tap.feed(indata, counting=self._file is not None)
+        except Exception:  # 오디오 스레드는 절대 멈추면 안 됨
+            pass
         with self._lock:
             if self._file is not None:
                 self._file.write(indata.copy())
@@ -105,6 +112,7 @@ class Recorder:
                 self._stream.close()
             finally:
                 self._stream = None
+        self.tap.reset()
 
     @property
     def is_open(self) -> bool:
@@ -133,6 +141,7 @@ class Recorder:
             self._file = sf.SoundFile(str(path), mode="w", samplerate=self.samplerate,
                                       channels=self.channels, subtype="PCM_16")
             self._frames = 0
+        self.tap.reset_silence()
         self.started_at = time.perf_counter()
         self.path = path
 

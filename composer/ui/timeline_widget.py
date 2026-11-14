@@ -129,6 +129,37 @@ class TimelineCanvas(QWidget):
         w = max(14.0, d * self.pps)
         return QRectF(self.x_of(boundary) - w / 2, r.bottom() - 3 - h, w, h)
 
+    def _paint_take_wave(self, p: QPainter, rect: QRectF, take, visible: QRectF) -> None:
+        """더빙 클립 안에 녹음 파형(자르기로 쓴 구간만)."""
+        from ..dubbing.levels import file_peaks
+
+        path = self.model.project.resolve(take.file)
+        peaks = file_peaks(path) if path else None
+        if peaks is None or not len(peaks):
+            return
+        per = 100.0
+        ts = float(take.trim_start or 0.0)
+        te = take.trim_end if take.trim_end is not None else len(peaks) / per
+        x0, x1 = max(rect.left() + 1, float(visible.left())), min(rect.right() - 1, float(visible.right()))
+        if x1 <= x0 or te <= ts:
+            return
+        mid, amp = rect.center().y(), rect.height() / 2 - 2
+        p.save()
+        p.setPen(QPen(QColor(220, 255, 230, 150), 1))
+        step = 1.0  # 화면 1px 마다 한 줄
+        x = x0
+        sec_per_px = (te - ts) / max(1.0, rect.width())
+        while x < x1:
+            a = ts + (x - rect.left()) * sec_per_px
+            i0, i1 = int(a * per), int((a + sec_per_px * step) * per) + 1
+            seg = peaks[max(0, i0):min(len(peaks), i1)]
+            if len(seg):
+                h = min(1.0, float(seg.max()) ** 0.6) * amp  # 작은 소리도 보이게 살짝 키움
+                if h >= 0.5:
+                    p.drawLine(QPointF(x, mid - h), QPointF(x, mid + h))
+            x += step
+        p.restore()
+
     def _take_len(self, take) -> float:
         from ..probe import probe
 
@@ -216,6 +247,8 @@ class TimelineCanvas(QWidget):
             p.setBrush(QBrush(base.lighter(135) if selected else base))
             p.setPen(QPen(QColor("#ffffff") if selected else base.darker(150), 2 if selected else 1))
             p.drawRoundedRect(rect, 4, 4)
+            if kind == "take":
+                self._paint_take_wave(p, rect, m.project.dubbing.takes[idx], ev.rect())
             p.setPen(QColor("#ffffff"))
             text = ""
             if kind == "clip":

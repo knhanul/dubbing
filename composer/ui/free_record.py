@@ -133,6 +133,9 @@ class FreeRecordPage(QWidget):
         r2 = QHBoxLayout(); r2.addWidget(self.btn_rec, 1); r2.addWidget(self.btn_import)
         gr.addWidget(self.with_video)
         gr.addLayout(r2)
+        from .level_widgets import MicStrip
+        self.strip = MicStrip()  # 입력 소리 (패널이 30fps 로 채움)
+        gr.addWidget(self.strip)
         gr.addWidget(self.lbl_pos)
 
         # --- 자막 만들기 ---
