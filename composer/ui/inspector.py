@@ -243,6 +243,65 @@ class ClipPage(_Page):
         self.model.select("")
 
 
+class TransitionPage(_Page):
+    """타임라인의 전환 블록을 골랐을 때: 종류·길이·없애기."""
+
+    def __init__(self, model):
+        super().__init__(model)
+        self.lbl = QLabel()
+        self.lbl.setWordWrap(True)
+        self.tr_type = self.combo([(t, TRANSITION_LABELS.get(t, t)) for t in TRANSITIONS if t != "none"])
+        self.tr_dur = NudgeSpin(0.05, 10)
+        self.lbl_info = QLabel()
+        self.lbl_info.setWordWrap(True)
+        self.lbl_info.setStyleSheet("color:#9aa0a6;")
+        self.btn_del = QPushButton("🗑 전환 없애기 (Delete)")
+        f = self.form
+        f.addRow(self.lbl)
+        f.addRow("전환 종류", self.tr_type)
+        f.addRow("전환 길이", self.tr_dur)
+        f.addRow(self.lbl_info)
+        f.addRow(self.btn_del)
+        self.tr_type.currentIndexChanged.connect(lambda _: self._apply("trt"))
+        self.tr_dur.valueChanged.connect(lambda _: self._apply("trd"))
+        self.btn_del.clicked.connect(self.remove)
+
+    @property
+    def idx(self) -> int:
+        return self.model.selection.index
+
+    def _apply(self, key):
+        i = self.idx
+        if self._loading or not (0 < i < len(self.model.project.clips)):
+            return
+        self._set(key, lambda p: setattr(p.clips[i], "transition",
+                                         Transition(self.tr_type.currentData(), round(self.tr_dur.value(), 3))))
+
+    def remove(self):
+        i = self.idx
+        if 0 < i < len(self.model.project.clips):
+            self.model.edit(lambda p: setattr(p.clips[i], "transition", Transition("none", 0.0)))
+            self.model.select("")
+
+    def refresh(self):
+        from ..timeline import effective_transition
+        i = self.idx
+        tl = self.model.timeline.clips
+        if not (0 < i < len(tl)):
+            return
+        self._loading = True
+        want = effective_transition(self.model.project, i)
+        got = tl[i].transition_in
+        self.lbl.setText(f"<b>{i}번 ↔ {i + 1}번 클립</b> 사이 전환 (경계 {tl[i].start:.2f}초)")
+        self.set_combo(self.tr_type, got.type)
+        self.tr_dur.setValue(want.duration)
+        note = (f"실제 길이 {got.duration:.2f}초 — 앞뒤 클립 중 짧은 쪽 길이까지만 됩니다. " if want.duration > got.duration + 1e-3
+                else "")
+        self.lbl_info.setText(note + f"경계 가운데에 걸쳐서 앞 클립 끝 뒤 {got.duration / 2:.2f}초 + 뒤 클립 시작 앞 "
+                              f"{got.duration / 2:.2f}초를 씁니다(전체 길이는 그대로). 블록 양 끝을 끌어도 길이가 바뀝니다.")
+        self._loading = False
+
+
 class SubtitlePage(_Page):
     def __init__(self, model):
         super().__init__(model)
@@ -663,7 +722,8 @@ class Inspector(QWidget):
         self.clip_page = ClipPage(model)
         self.sub_page = SubtitlePage(model)
         self.take_page = TakePage(model)
-        for w in (self.empty, self.clip_page, self.sub_page, self.take_page):
+        self.tr_page = TransitionPage(model)
+        for w in (self.empty, self.clip_page, self.sub_page, self.take_page, self.tr_page):
             self.stack.addWidget(w)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -680,7 +740,8 @@ class Inspector(QWidget):
 
     def _on_selection(self):
         k = self.model.selection.kind
-        page = {"clip": self.clip_page, "subtitle": self.sub_page, "take": self.take_page}.get(k)
+        page = {"clip": self.clip_page, "subtitle": self.sub_page, "take": self.take_page,
+                "transition": self.tr_page}.get(k)
         if k == "bgm":  # 배경음악은 프로젝트 설정
             self.stack.setCurrentWidget(self.empty)
             self.settings_requested.emit()

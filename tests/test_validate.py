@@ -53,7 +53,7 @@ def _media(tmp_path):
 def test_valid_project_has_no_errors(tmp_path):
     base = _media(tmp_path)
     data = {
-        "version": 1, "output": {"width": 1920, "height": 1080, "fps": 30},
+        "version": 2, "output": {"width": 1920, "height": 1080, "fps": 30},
         "transition": {"type": "crossfade", "duration": 0.5},
         "clips": [{"file": "a.png", "type": "image", "duration": 3, "motion": "zoom_in"},
                   {"file": "b.mp4", "type": "video", "speed": 2, "trim_start": 1, "trim_end": 4}],

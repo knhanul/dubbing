@@ -32,7 +32,7 @@ from ..schema import Clip, Project
 from ..subtitles import Cue
 from ..timeline import ClipTiming, Timeline, atempo_chain, take_position
 
-BUILDER_VERSION = 4
+BUILDER_VERSION = 5  # 5: 전환 여분(핸들) 포함 중간 파일
 AUDIO_RATE = 48000
 
 
@@ -99,13 +99,17 @@ def _fit_filters(fit: str, w: int, h: int, bg: str, flags: str = "lanczos") -> l
             f"crop={w}:{h}"]
 
 
-def motion_quad(motion: str, strength: float, frames: int, easing: str = "ease") -> dict[str, str]:
+def motion_quad(motion: str, strength: float, frames: int, easing: str = "ease",
+                a0: float = 0.0, a1: float = 1.0) -> dict[str, str]:
     """perspective 필터용 원본 좌표 꼭짓점 식(x0..y3). 쉼표 없는 식만 사용합니다.
 
     W, H 는 (확대된) 입력 크기, in 은 프레임 번호입니다.
     """
     n1 = max(1, frames - 1)
-    p = f"(in/{n1})" if easing == "linear" else f"((1-cos(PI*in/{n1}))/2)"
+    lin = f"(in/{n1})"
+    if abs(a0) > 1e-6 or abs(a1 - 1) > 1e-6:  # 자르기로 나눈 이미지: 움직임 경로의 a0~a1 구간만 (이어지게)
+        lin = f"({fmt(a0)}+{fmt(a1 - a0)}*in/{n1})"
+    p = lin if easing == "linear" else f"((1-cos(PI*{lin}))/2)"
     s = fmt(max(0.0, min(1.0, strength)))
     zin, zout, zfix = f"(1+{s}*{p})", f"(1+{s}*(1-{p}))", f"(1+{s})"
     # (줌 식, 가로 여유 공간 중 위치 비율 0~1, 세로 위치 비율 0~1)
@@ -127,8 +131,9 @@ def motion_quad(motion: str, strength: float, frames: int, easing: str = "ease")
             "x2": x, "y2": f"{y}+{ch}", "x3": f"{x}+{cw}", "y3": f"{y}+{ch}"}
 
 
-def motion_filter(motion: str, strength: float, frames: int, easing: str = "ease") -> str:
-    q = motion_quad(motion, strength, frames, easing)
+def motion_filter(motion: str, strength: float, frames: int, easing: str = "ease",
+                  a0: float = 0.0, a1: float = 1.0) -> str:
+    q = motion_quad(motion, strength, frames, easing, a0, a1)
     pts = ":".join(f"{k}='{v}'" for k, v in q.items())
     return f"perspective={pts}:interpolation=cubic:sense=source:eval=frame"
 
@@ -154,6 +159,7 @@ def clip_cache_key(project: Project, clip: Clip, timing: ClipTiming, settings: R
     d.pop("label", None)
     payload = {
         "v": BUILDER_VERSION, "clip": d, "dur": round(timing.duration, 4), "speed": round(timing.speed, 6),
+        "pre": round(timing.pre, 4), "post": round(timing.post, 4),
         "in": round(timing.source_in, 4), "out": round(timing.source_out, 4),
         "w": w, "h": h, "fps": project.output.fps, "fit": clip.fit or project.output.fit,
         "bg": project.output.background, "draft": settings.draft, "up": settings.motion_upscale(),
@@ -170,9 +176,10 @@ def build_clip_job(project: Project, clip: Clip, timing: ClipTiming, settings: R
     fps_s = fmt(fps)
     fit = clip.fit or project.output.fit
     bg = project.output.background
-    dur = timing.duration
+    dur = timing.render_len  # 전환 여분(앞 pre + 뒤 post) 포함
     dur_s = fmt(dur)
     args: list[str] = ["-hide_banner", "-y", "-nostdin"]
+    freeze_pre = 0.0
     vf: list[str]
     use_audio = clip.type == "video" and has_audio and not clip.mute and clip.volume > 0
 
@@ -187,19 +194,23 @@ def build_clip_job(project: Project, clip: Clip, timing: ClipTiming, settings: R
             args += ["-loop", "1", "-framerate", fps_s, "-t", dur_s, "-i", str(source)]
             vf = _fit_filters(fit, w * k, h * k, bg) + [
                 "format=yuv444p",
-                motion_filter(motion, clip.motion_strength, n, clip.motion_easing),
+                motion_filter(motion, clip.motion_strength, n, clip.motion_easing,
+                              clip.motion_from, clip.motion_to),
             ]
             if k > 1:
                 vf.append(f"scale={w}:{h}:flags=lanczos")
             vf.append(f"fps={fps_s}")
     else:
-        used = timing.source_out - timing.source_in
-        if timing.source_in > 0:
-            args += ["-ss", fmt(timing.source_in)]
+        s_in, s_out, freeze_pre, _ = timing.handle_source()  # 전환 여분은 자른 바깥 원본에서, 모자라면 멈춤 화면
+        used = s_out - s_in
+        if s_in > 0:
+            args += ["-ss", fmt(s_in)]
         args += ["-t", fmt(used), "-i", str(source)]
         sp = timing.speed
         vf = [f"setpts=(PTS-STARTPTS)/{fmt(sp)}" if abs(sp - 1) > 1e-6 else "setpts=PTS-STARTPTS",
               f"fps={fps_s}"] + _fit_filters(fit, w, h, bg)
+        if freeze_pre > 1e-3:  # 앞 여분이 모자라면 첫 프레임을 멈춰서 채움
+            vf.append(f"tpad=start_mode=clone:start_duration={fmt(freeze_pre)}")
 
     vf += ["setsar=1", "format=yuv420p",
            f"tpad=stop_mode=clone:stop_duration={dur_s}", f"trim=duration={dur_s}", "setpts=PTS-STARTPTS"]
@@ -209,6 +220,9 @@ def build_clip_job(project: Project, clip: Clip, timing: ClipTiming, settings: R
             f"aresample={AUDIO_RATE}", "aformat=sample_fmts=fltp:channel_layouts=stereo"]
         if abs(clip.volume - 1) > 1e-6:
             af.append(f"volume={fmt(clip.volume)}")
+        if freeze_pre > 1e-3:  # 화면을 멈춘 만큼 소리는 무음으로 밀기
+            ms = int(round(freeze_pre * 1000))
+            af.append(f"adelay={ms}|{ms}")
         af += [f"apad=whole_dur={dur_s}", f"atrim=duration={dur_s}"]
         graph = f"[0:v]{','.join(vf)}[v];[0:a]{','.join(af)}[a]"
         amap = "[a]"
@@ -289,7 +303,8 @@ def build_assembly(project: Project, timeline: Timeline, clip_files: list[Path],
         g.append(f"[{i}:v]setpts=PTS-STARTPTS,fps={fmt(fps)}[v{i}]")
         g.append(f"[{i}:a]asetpts=PTS-STARTPTS[a{i}]")
     cur_v, cur_a = "v0", "a0"
-    length = timeline.clips[0].duration if timeline.clips else 0.0
+    # 중간 파일은 전환 여분을 포함(render_len). xfade 가 겹치는 길이 d 만큼 줄어서 결국 전체 = 클립 길이 합
+    length = timeline.clips[0].render_len if timeline.clips else 0.0
     for i in range(1, n):
         t = timeline.clips[i]
         tr = t.transition_in
@@ -297,13 +312,13 @@ def build_assembly(project: Project, timeline: Timeline, clip_files: list[Path],
         if tr.type == "none" or tr.duration <= 0:
             g.append(f"[{cur_v}][{cur_a}][v{i}][a{i}]concat=n=2:v=1:a=1[{nv}c][{na}]")
             g.append(f"[{nv}c]fps={fmt(fps)}[{nv}]")
-            length += t.duration
+            length += t.render_len
         else:
             name = XFADE_NAMES.get(tr.type, tr.type)
             off = max(0.0, length - tr.duration)
             g.append(f"[{cur_v}][v{i}]xfade=transition={name}:duration={fmt(tr.duration)}:offset={fmt(off)}[{nv}]")
             g.append(f"[{cur_a}][a{i}]acrossfade=d={fmt(tr.duration)}:c1=tri:c2=tri[{na}]")
-            length = length + t.duration - tr.duration
+            length = length + t.render_len - tr.duration
         cur_v, cur_a = nv, na
 
     burn = settings.burn_subtitles if settings.burn_subtitles is not None else project.subtitle.burn_in
@@ -366,13 +381,10 @@ def _voice_graph(project: Project, take_files, total: float, idx: int, args: lis
     """더빙 테이크들을 [voice] 하나로 섞는 필터. (라벨 또는 None, 다음 입력 번호)"""
     total_s = fmt(total)
     voice_labels = []
-    for j, (path, pos, vol) in enumerate(take_files):
+    for j, (path, pos, vol, *rng) in enumerate(take_files):
         args += ["-i", str(path)]
         inputs.append(str(path))
-        chain = [f"aresample={AUDIO_RATE}", "aformat=sample_fmts=fltp:channel_layouts=stereo"]
-        if pos < 0:
-            chain += [f"atrim=start={fmt(-pos)}", "asetpts=PTS-STARTPTS"]
-            pos = 0.0
+        chain, pos = take_chain(pos, *rng)
         chain.append(f"volume={fmt(vol * project.dubbing.volume)}")
         ms = int(round(pos * 1000))
         if ms > 0:
@@ -445,10 +457,22 @@ def build_bgm_stem(project: Project, total: float, bgm_path: Path, bgm_duration:
                    "-progress", "pipe:1", "-nostats", str(output)]
 
 
-def take_entries(project: Project, cues: list[Cue]) -> list[tuple[str, float, float]]:
-    """(상대 파일, 위치, 볼륨) — 파일 존재 여부는 호출자가 확인."""
+def take_entries(project: Project, cues: list[Cue]) -> list[tuple[str, float, float, float, Optional[float]]]:
+    """(상대 파일, 위치(파일 0초의 타임라인 시각), 볼륨, 파일 안 시작, 파일 안 끝) — 파일 존재 여부는 호출자가 확인."""
     by_index = {c.index: c for c in cues}
     res = []
     for t in project.dubbing.takes:
-        res.append((t.file, take_position(t, by_index, project.dubbing.latency_ms), t.volume))
+        res.append((t.file, take_position(t, by_index, project.dubbing.latency_ms), t.volume,
+                    float(t.trim_start or 0.0), t.trim_end))
     return res
+
+
+def take_chain(pos: float, trim_start: float = 0.0, trim_end: Optional[float] = None) -> tuple[list[str], float]:
+    """테이크 한 개: 파일에서 [trim_start, trim_end] 만 꺼내(자르기로 나눈 더빙, 원본은 그대로) 놓을 위치.
+    (필터 목록, 지연할 초) — 타임라인 0초보다 앞은 버림."""
+    chain = [f"aresample={AUDIO_RATE}", "aformat=sample_fmts=fltp:channel_layouts=stereo"]
+    s0 = max(float(trim_start or 0.0), -pos if pos < 0 else 0.0)
+    if s0 > 0 or trim_end is not None:
+        chain += [f"atrim=start={fmt(s0)}" + (f":end={fmt(trim_end)}" if trim_end is not None else ""),
+                  "asetpts=PTS-STARTPTS"]
+    return chain, max(0.0, pos + s0)

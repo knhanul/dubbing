@@ -338,8 +338,15 @@ class DubbingPanel(QWidget):
     def _live_takes(self, t0: float, t1: float):
         if not (0 < t1 - t0 < 0.5):
             return
+        stops = getattr(self, "_live_stops", {})
+        for mp, end in list(stops.items()):  # 자르기로 나눈 더빙: 구간 끝에서 멈춤
+            if t1 >= end:
+                mp.stop()
+                stops.pop(mp, None)
         for take, pos in zip(self.model.project.dubbing.takes, self.model.take_positions()):
-            if t0 < max(pos, 0.001) <= t1:
+            ts = float(take.trim_start or 0.0)
+            begin = pos + ts
+            if t0 < max(begin, 0.001) <= t1:
                 path = self.model.project.resolve(take.file)
                 if path and path.exists():
                     mp = self._live_players[self._live_i % len(self._live_players)]
@@ -348,9 +355,15 @@ class DubbingPanel(QWidget):
                     from ..tracks import audible
                     gain = 1.0 if audible(self.model.project, "dubbing") else 0.0  # 🔇/S
                     mp.audioOutput().setVolume(min(1.0, take.volume * self.model.project.dubbing.volume) * gain)
-                    if pos < 0:
-                        mp.setPosition(int(-pos * 1000))
+                    start_in_file = max(ts, -pos)
+                    if start_in_file > 0:
+                        mp.setPosition(int(start_in_file * 1000))
+                    if take.trim_end is not None:
+                        stops[mp] = pos + take.trim_end
+                    else:
+                        stops.pop(mp, None)
                     mp.play()
+        self._live_stops = stops
 
     def stop_live(self):
         for mp in self._live_players:
@@ -485,8 +498,8 @@ class DubbingPanel(QWidget):
         self.take_player.setSource(QUrl.fromLocalFile(str(path)))
         self.take_audio.setVolume(min(1.0, take.volume))
         if with_video:
-            self.player.seek(max(0.0, pos))
-            self.take_player.setPosition(int(max(0.0, -pos) * 1000))
+            self.player.seek(max(0.0, pos + (take.trim_start or 0.0)))
+            self.take_player.setPosition(int(max(float(take.trim_start or 0.0), -pos) * 1000))
             self.player.play()
         self.take_player.play()
 

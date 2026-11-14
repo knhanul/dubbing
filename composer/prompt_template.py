@@ -59,7 +59,7 @@ def media_info_text(path: Path) -> str:
 
 
 EXAMPLE = {
-    "version": 1,
+    "version": 2,
     "title": "예시 영상",
     "output": {"width": 1920, "height": 1080, "fps": 30, "fit": "cover", "file": "output.mp4"},
     "transition": {"type": "crossfade", "duration": 0.5},
@@ -92,6 +92,8 @@ RULES = f"""규칙:
      mute: true 면 원본 소리 제거, volume 은 원본 소리 크기(1.0 = 그대로).
    - transition: 이전 클립에서 이 클립으로 넘어가는 전환. 생략하면 최상위 transition 사용.
      type 값: {", ".join(TRANSITIONS)}  (duration 은 0.3~1.5 권장)
+     전환은 두 클립의 경계 가운데에 걸쳐지고 클립들은 맞닿아 이어지므로 **전체 길이 = 클립 길이(duration)의 합** 이다
+     (전환이 길이를 줄이지 않는다). "version": 2 로 쓴다.
 5. output: width/height 는 짝수, fps 는 24/30/60 중 하나 권장. fit 은 "cover"(꽉 채움) 또는 "contain"(여백).
 6. subtitle.file 에는 .srt 파일, bgm.file 에는 음악 파일을 넣는다. 없으면 해당 항목을 생략한다.
 7. subtitle.style (자막 모양, 생략 가능 — 영상 분위기에 맞게 골라도 됨):
@@ -117,7 +119,7 @@ def build_prompt(entries: list[FileEntry], request: str = "", width: int = 1920,
         f"출력 해상도: {width}x{height}, {fps:g}fps",
     ]
     if target_length:
-        lines.append(f"목표 전체 길이: 약 {target_length:g}초 (전환 겹침 포함)")
+        lines.append(f"목표 전체 길이: 약 {target_length:g}초 (= 클립 길이의 합, 전환은 길이를 줄이지 않음)")
     lines += ["", "## 사용 가능한 파일"]
     labels = {"image": "이미지", "video": "영상", "audio": "음악/소리", "subtitle": "자막"}
     if not entries:

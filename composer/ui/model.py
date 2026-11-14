@@ -40,6 +40,7 @@ class ProjectModel(QObject):
         self._snapshot = self.project.to_json()
         self.dirty = False
         self.revision = 0  # 변경될 때마다 증가 (미리보기 최신 여부 판단)
+        self.migrated = False  # 방금 연 프로젝트를 새 전환 방식으로 바꿨는지
         self.recompute()
 
     # --- 계산 ---
@@ -66,7 +67,14 @@ class ProjectModel(QObject):
         return [take_position(t, by, self.project.dubbing.latency_ms) for t in self.project.dubbing.takes]
 
     # --- 변경/실행 취소 ---
+    def _migrate(self, project: Project) -> bool:
+        """예전 형식(version 1, 겹쳐 놓는 전환) → 지금 형식. 보이는 시간은 그대로."""
+        from ..timeline import migrate_v1
+        self.migrated = migrate_v1(project, self.duration_of)
+        return self.migrated
+
     def set_project(self, project: Project, path: Optional[Path] = None) -> None:
+        migrated = self._migrate(project)
         self.project = project
         self.path = Path(path) if path else None
         self._undo.clear()
@@ -74,7 +82,7 @@ class ProjectModel(QObject):
         self._last_key = None
         self._snapshot = project.to_json()
         self.selection = Selection()
-        self._set_dirty(False)
+        self._set_dirty(migrated)  # 바꿨으면 '저장 안 됨' 표시 → 저장하면 새 형식
         self.revision += 1
         self.recompute()
         self.changed.emit()
@@ -108,6 +116,7 @@ class ProjectModel(QObject):
             self._undo.pop(0)
         self._redo.clear()
         self._last_key = None
+        self._migrate(project)
         self.project = project
         self._snapshot = project.to_json()
         self.revision += 1

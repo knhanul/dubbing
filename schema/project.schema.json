@@ -9,7 +9,11 @@
   "properties": {
     "version": {
       "type": "integer",
-      "const": 1
+      "enum": [
+        1,
+        2
+      ],
+      "description": "2 = 전환을 클립 경계 가운데에 걸침(클립은 맞닿음, 전체 길이 = 클립 길이 합). 1 = 예전 겹쳐 놓기(열 때 자동 변환)"
     },
     "title": {
       "type": "string"
@@ -145,6 +149,16 @@
               "linear",
               "ease"
             ]
+          },
+          "motion_from": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "motion_to": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
           },
           "speed": {
             "type": "number",
@@ -518,6 +532,17 @@
                 "type": "number",
                 "minimum": 0,
                 "maximum": 4
+              },
+              "trim_start": {
+                "type": "number",
+                "minimum": 0
+              },
+              "trim_end": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "exclusiveMinimum": 0
               }
             },
             "additionalProperties": false

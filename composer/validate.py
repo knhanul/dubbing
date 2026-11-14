@@ -198,7 +198,10 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
         v.err("$", "최상위는 JSON 객체 {...} 여야 합니다.")
         return v.issues
     v.unknown(data, {"version", "title", "output", "transition", "clips", "subtitle", "bgm", "dubbing", "tracks"}, "$")
-    if "version" in data and data["version"] != SCHEMA_VERSION:
+    if "version" in data and data["version"] == 1:
+        v.warn("$.version", "예전 형식(version 1: 전환이 클립을 겹쳐 놓음)입니다. 열 때 보이는 시간이 같도록 "
+                            f"version {SCHEMA_VERSION}(전환을 경계 가운데에 걸침)으로 자동으로 바꿉니다.")
+    elif "version" in data and data["version"] != SCHEMA_VERSION:
         v.warn("$.version", f"버전 {SCHEMA_VERSION} 형식으로 해석합니다.")
 
     out = data.get("output", {})
@@ -222,7 +225,7 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
     if not isinstance(clips, list) or not clips:
         v.err("clips", "클립이 하나 이상 있는 배열이 필요합니다.")
         clips = []
-    allowed_clip = {"file", "type", "duration", "motion", "motion_strength", "motion_easing", "speed",
+    allowed_clip = {"file", "type", "duration", "motion", "motion_strength", "motion_easing", "motion_from", "motion_to", "speed",
                     "fit_duration", "trim_start", "trim_end", "mute", "volume", "fit", "transition", "label"}
     for i, c in enumerate(clips):
         p = f"clips[{i}]"
@@ -260,8 +263,8 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
         _transition(v, c.get("transition"), f"{p}.transition")
         tr = c.get("transition") if isinstance(c.get("transition"), dict) else None
         dur = c.get("fit_duration") or c.get("duration")
-        if tr and _is_num(tr.get("duration")) and _is_num(dur) and tr["duration"] > dur / 2:
-            v.warn(f"{p}.transition.duration", "전환이 클립 길이의 절반보다 길어서 자동으로 줄어듭니다.")
+        if tr and _is_num(tr.get("duration")) and _is_num(dur) and tr["duration"] > dur:
+            v.warn(f"{p}.transition.duration", "전환이 클립 길이보다 길어서 자동으로 줄어듭니다(앞뒤 클립 중 짧은 쪽 길이까지).")
 
     st = data.get("subtitle")
     if st is not None:
@@ -339,6 +342,9 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
                 v.file(t.get("file"), f"{pp}.file", base, ("audio",))
                 v.num(t, "offset", pp)
                 v.num(t, "volume", pp, 0, 4)
+                v.num(t, "trim_start", pp, 0)
+                if t.get("trim_end") is not None:
+                    v.num(t, "trim_end", pp, 0)
 
     tr = data.get("tracks")
     if tr is not None:

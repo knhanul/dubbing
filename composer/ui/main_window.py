@@ -23,7 +23,7 @@ from .dnd import ClipListPanel, paths_from_mime
 from .dubbing_panel import DubbingPanel
 from .inspector import Inspector, _rel
 from .model import ProjectModel
-from .preview import PreviewPlayer
+from .preview import PreviewPlayer, fmt_time
 from .prompt_dialog import PromptDialog
 from .render_dialog import FinalRenderOptions, ProgressDialog, RenderWorker
 from .timeline_widget import TimelineView
@@ -96,12 +96,13 @@ class MainWindow(QMainWindow):
         top.setSizes([900, 560])
         main = QSplitter(Qt.Vertical)
         main.addWidget(top)
-        main.addWidget(self.timeline)
-        main.setSizes([700, 230])
+        main.addWidget(self._build_timeline_box())
+        main.setSizes([700, 260])
         self.setCentralWidget(main)
 
         self.player.position_changed.connect(self.timeline.set_playhead)
         self.timeline.canvas.seek_requested.connect(self.player.seek)
+        self.timeline.canvas.context_requested.connect(self._timeline_menu)
         # 드롭 이벤트가 끝난 뒤 처리(드롭 중에 창을 띄우면 Windows 탐색기 끌기가 멈춤)
         self.timeline.canvas.files_dropped.connect(lambda paths, idx: self._drop_later(paths, idx))
         self.clip_panel.files_dropped.connect(lambda paths, idx: self._drop_later(paths, idx))
@@ -192,6 +193,9 @@ class MainWindow(QMainWindow):
         self._act(e, "AI 답변(JSON) 붙여넣어 적용…", lambda: self.open_prompt_dialog(tab=1), "Ctrl+Shift+V")
         self._act(e, "검사하기 (파일·값 확인)", self.validate_current)
         e.addSeparator()
+        self._act(e, "✂ 재생 위치에서 자르기", lambda: self.cut_at(), "Ctrl+K")
+        self._act(e, "구간 잘라내기 (In~Out)", self.cut_marked_range)
+        e.addSeparator()
         self.act_clear_subs = self._act(e, "자막 전체 제거", self.remove_all_subtitles,
                                         tip="프로젝트에서 자막을 모두 뺍니다(원본 SRT 파일은 그대로)")
         self.act_clear_bgm = self._act(e, "배경음악 제거", self.remove_bgm,
@@ -268,21 +272,187 @@ class MainWindow(QMainWindow):
         if k == Qt.Key_Home:
             self.player.seek(0)
             return True
-        if k == Qt.Key_Delete and self.model.selection.kind in ("clip", "subtitle", "take", "bgm") \
-                and self._locked_msg(self.model.selection.kind):
+        if k == Qt.Key_Delete:
+            return self.delete_selected()
+        if k == Qt.Key_I and not ctrl:
+            self.set_mark_in()
             return True
-        if k == Qt.Key_Delete and self.model.selection.kind == "clip":
+        if k == Qt.Key_O and not ctrl:
+            self.set_mark_out()
+            return True
+        return False
+
+    # ------------------------------------------------------------------ 자르기 · 삭제 (프리미어처럼)
+    def _build_timeline_box(self):
+        from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        bar = QHBoxLayout()
+        bar.setContentsMargins(4, 2, 4, 0)
+
+        def b(text, tip, slot):
+            w = QPushButton(text)
+            w.setToolTip(tip)
+            w.clicked.connect(slot)
+            bar.addWidget(w)
+            return w
+        self.btn_cut = b("✂ 자르기 (Ctrl+K)", "빨간 재생 위치에서 고른 항목(없으면 그 아래 클립)을 둘로 나눕니다.\n"
+                         "클립·자막·더빙 모두 됩니다. 원본 파일은 그대로입니다.", lambda: self.cut_at())
+        self.btn_delete = b("🗑 삭제 (Delete)", "고른 조각을 지웁니다. 클립은 뒤 클립이 당겨져 붙습니다(리플 삭제).",
+                            self.delete_selected)
+        bar.addSpacing(12)
+        self.btn_in = b("[ In (I)", "구간 시작 표시 — 빨간 재생 위치", lambda: self.set_mark_in())
+        self.btn_out = b("Out (O) ]", "구간 끝 표시 — 빨간 재생 위치", lambda: self.set_mark_out())
+        self.btn_cut_range = b("✂ 구간 잘라내기", "In~Out 구간을 클립에서 빼고 뒤를 당겨 붙입니다", self.cut_marked_range)
+        self.chk_all_tracks = QCheckBox("모든 트랙 함께")
+        self.chk_all_tracks.setChecked(True)
+        self.chk_all_tracks.setToolTip("켜면 자막·더빙도 같은 구간을 빼고 함께 당깁니다(잠긴 트랙은 그대로)")
+        bar.addWidget(self.chk_all_tracks)
+        self.btn_clear_marks = b("In/Out 지우기", "", self.clear_marks)
+        bar.addStretch(1)
+        lay.addLayout(bar)
+        lay.addWidget(self.timeline, 1)
+        self._update_cut_buttons()
+        return box
+
+    def _update_cut_buttons(self):
+        c = self.timeline.canvas
+        ok = c.mark_in is not None and c.mark_out is not None and abs(c.mark_out - c.mark_in) >= 0.1
+        self.btn_cut_range.setEnabled(ok)
+        self.btn_clear_marks.setEnabled(c.mark_in is not None or c.mark_out is not None)
+
+    def _file_len(self, rel: str) -> float:
+        from ..probe import probe
+        p = self.model.project.resolve(rel)
+        try:
+            return float(probe(p).duration or 0.0) if p and p.exists() else 1.0
+        except Exception:  # noqa: BLE001
+            return 1.0
+
+    def cut_at(self, t: Optional[float] = None) -> bool:
+        """✂ 자르기: 고른 클립/자막/더빙을(없거나 위치가 밖이면 재생 위치 아래 클립을) t 초에서 둘로."""
+        from ..edit_ops import clip_index_at, split_clip, split_cue, split_take
+        t = self.player.position() if t is None else t
+        s = self.model.selection
+        kind, idx = s.kind, s.index
+        if kind == "clip":
+            tm = self.model.timeline.clips[idx] if 0 <= idx < len(self.model.timeline.clips) else None
+            if tm is None or not (tm.start < t < tm.end):
+                kind = ""
+        if kind not in ("clip", "subtitle", "take"):
+            kind, idx = "clip", clip_index_at(self.model.timeline, t)
+            if idx is None:
+                self.statusBar().showMessage("재생 위치 아래에 자를 클립이 없습니다", 5000)
+                return False
+        if self._locked_msg(kind):
+            return False
+        box = {}
+        tl = self.model.timeline
+        if kind == "clip":
+            self.model.edit(lambda p: box.setdefault("ok", split_clip(p, tl, idx, t)))
+        elif kind == "subtitle":
+            self.model.edit(lambda p: box.setdefault("ok", split_cue(p, idx, t)))
+        else:
+            self.model.edit(lambda p: box.setdefault("ok", split_take(p, idx, t, self._file_len)))
+        if not box.get("ok"):
+            self.statusBar().showMessage("자를 수 없습니다 — 재생 위치를 그 항목 안쪽(끝에서 0.1초 이상)에 두세요", 6000)
+            return False
+        name = {"clip": "클립", "subtitle": "자막", "take": "더빙"}[kind]
+        self.model.select(kind, idx + 1)  # 뒤 조각을 고름
+        self.statusBar().showMessage(f"✂ {name}을(를) {fmt_time(t)}에서 둘로 나눴습니다 (Ctrl+Z 로 되돌리기)", 5000)
+        return True
+
+    def delete_selected(self) -> bool:
+        """🗑 삭제 (Delete): 고른 조각 지우기. 클립은 리플 삭제(뒤가 당겨 붙음)."""
+        kind = self.model.selection.kind
+        if kind in ("clip", "subtitle", "take", "bgm", "transition") and self._locked_msg(kind):
+            return True
+        if kind == "clip":
             self.inspector.clip_page._delete()
+            self.statusBar().showMessage("클립을 지우고 뒤 클립을 당겨 붙였습니다 (Ctrl+Z 로 되돌리기)", 5000)
             return True
-        if k == Qt.Key_Delete and self.model.selection.kind == "subtitle":
+        if kind == "subtitle":
             if self.model.cue_by_index(self.model.selection.index) is not None:
                 self.inspector.sub_page._delete()
                 self.statusBar().showMessage("자막 한 줄을 지웠습니다 (Ctrl+Z 로 되돌리기)", 5000)
             return True
-        if k == Qt.Key_Delete and self.model.selection.kind == "bgm":
+        if kind == "take":
+            self.inspector.take_page._delete()
+            self.statusBar().showMessage("더빙 조각을 지웠습니다 (원본 파일은 그대로, Ctrl+Z 로 되돌리기)", 5000)
+            return True
+        if kind == "transition":
+            self.inspector.tr_page.remove()
+            self.statusBar().showMessage("전환을 없앴습니다 (Ctrl+Z 로 되돌리기)", 5000)
+            return True
+        if kind == "bgm":
             self.remove_bgm()
             return True
+        if kind == "":
+            self.statusBar().showMessage("지울 항목을 먼저 타임라인에서 고르세요", 4000)
         return False
+
+    def set_mark_in(self, t: Optional[float] = None):
+        c = self.timeline.canvas
+        t = round(self.player.position() if t is None else t, 3)
+        c.set_marks(t, c.mark_out if c.mark_out is not None and c.mark_out > t else None)
+        self._update_cut_buttons()
+        self.statusBar().showMessage(f"In {fmt_time(t)} — 이제 Out(O)을 표시하세요", 4000)
+
+    def set_mark_out(self, t: Optional[float] = None):
+        c = self.timeline.canvas
+        t = round(self.player.position() if t is None else t, 3)
+        c.set_marks(c.mark_in if c.mark_in is not None and c.mark_in < t else None, t)
+        self._update_cut_buttons()
+        self.statusBar().showMessage(f"Out {fmt_time(t)}", 4000)
+
+    def clear_marks(self):
+        self.timeline.canvas.set_marks(None, None)
+        self._update_cut_buttons()
+
+    def cut_marked_range(self) -> bool:
+        """✂ 구간 잘라내기: In~Out 을 클립에서 빼고 당김(선택: 자막·더빙도 함께). 되돌리기 한 번."""
+        from ..edit_ops import cut_range
+        from ..timeline import build_timeline
+        from ..tracks import locked
+        c = self.timeline.canvas
+        if c.mark_in is None or c.mark_out is None:
+            self.statusBar().showMessage("먼저 In(I)과 Out(O)을 표시하세요", 5000)
+            return False
+        if self._locked_msg("clip"):
+            return False
+        a, b = c.mark_in, c.mark_out
+        allt = self.chk_all_tracks.isChecked()
+        skip = {k for k in ("subtitle", "dubbing") if locked(self.model.project, k)}
+        box = {}
+
+        def fn(p):
+            box["r"] = cut_range(p, lambda: build_timeline(p, self.model.duration_of), a, b, allt, self._file_len, skip)
+        self.model.edit(fn)
+        removed, note = box.get("r", (0.0, ""))
+        if removed <= 0:
+            self.statusBar().showMessage("잘라낼 클립이 없습니다", 5000)
+            return False
+        self.clear_marks()
+        self.model.select("")
+        self.player.seek(min(a, b))
+        extra = " (잠긴 트랙은 그대로)" if allt and skip else ""
+        self.statusBar().showMessage(f"✂ {removed:.2f}초를 잘라내고 당겼습니다: {note}{extra} — Ctrl+Z 로 되돌리기", 8000)
+        return True
+
+    def _timeline_menu(self, gpos, t: float):
+        from PySide6.QtWidgets import QMenu
+        m = QMenu(self)
+        m.addAction(f"✂ 여기서 자르기 ({fmt_time(t)})", lambda: self.cut_at(t))
+        m.addAction("🗑 삭제", self.delete_selected).setEnabled(bool(self.model.selection.kind))
+        m.addSeparator()
+        m.addAction("[ 여기를 In 으로", lambda: self.set_mark_in(t))
+        m.addAction("여기를 Out 으로 ]", lambda: self.set_mark_out(t))
+        m.addAction("✂ 구간 잘라내기", self.cut_marked_range).setEnabled(self.btn_cut_range.isEnabled())
+        m.addAction("In/Out 지우기", self.clear_marks).setEnabled(self.btn_clear_marks.isEnabled())
+        self._last_menu = m
+        m.popup(gpos)
 
     def _apply_track_audio(self):
         """🔇/S: 미리보기 소리 크기만 바꿉니다(다시 렌더 없음). 배경음악 WAV 는 설정이 바뀌면 다시 만듦."""
@@ -614,6 +784,9 @@ class MainWindow(QMainWindow):
         self._thumbs.clear()
         self.auto.reset()
         self.model.set_project(project, path)
+        if self.model.migrated:
+            self.statusBar().showMessage("예전 형식 프로젝트를 새 전환 방식(경계 가운데)으로 바꿨습니다 — 보이는 시간은 그대로이고, "
+                                         "저장하면 새 형식으로 저장됩니다.", 12000)
         self._load_preview_for_project()
 
     def open_prompt_dialog(self, tab: int = 0):

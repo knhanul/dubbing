@@ -15,7 +15,7 @@ from ..subtitles import project_cues, to_srt
 from .ass import build_ass
 from ..timeline import build_timeline
 from .ffmpeg_builder import (RenderSettings, build_assembly, build_clip_job, clip_cache_key,
-                             take_entries)
+                             take_chain, take_entries)
 
 ProgressFn = Callable[[float, str], None]
 
@@ -151,10 +151,10 @@ def render_project(project: Project, output: Path | str, settings: RenderSetting
         ass_name = "subs.ass"  # 새겨 넣기용 (스타일·위치·나타나기 효과)
         (work / ass_name).write_text(build_ass(project, cues), encoding="utf-8")
     takes = []
-    for rel, pos, vol in take_entries(project, cues):
+    for rel, pos, vol, ts, te in take_entries(project, cues):
         p = project.resolve(rel)
         if p and p.exists():
-            takes.append((p, pos, vol))
+            takes.append((p, pos, vol, ts, te))
     bgm_path = project.resolve(project.bgm.file) if project.bgm.file else None
     bgm_dur = None
     if bgm_path is not None:
@@ -185,15 +185,12 @@ def export_voice_wav(project: Project, output: Path | str, cancel: Optional[thre
     args = ["-hide_banner", "-y", "-nostdin", "-f", "lavfi", "-t", total, "-i", f"anullsrc=r={AUDIO_RATE}:cl=stereo"]
     g, labels = [], ["[0:a]"]
     k = 1
-    for rel, pos, vol in take_entries(project, cues):
+    for rel, pos, vol, ts, te in take_entries(project, cues):
         p = project.resolve(rel)
         if not p or not p.exists():
             continue
         args += ["-i", str(p)]
-        chain = [f"aresample={AUDIO_RATE}", "aformat=sample_fmts=fltp:channel_layouts=stereo"]
-        if pos < 0:
-            chain += [f"atrim=start={fmt(-pos)}", "asetpts=PTS-STARTPTS"]
-            pos = 0
+        chain, pos = take_chain(pos, ts, te)
         chain.append(f"volume={fmt(vol * project.dubbing.volume)}")
         if pos > 0:
             chain.append(f"adelay=delays={int(round(pos * 1000))}:all=1")
@@ -219,10 +216,10 @@ def render_bgm_stem(project: Project, output: Path | str, cancel: Optional[threa
         return None
     timeline = build_timeline(project, source_duration(project))
     takes = []
-    for rel, pos, vol in take_entries(project, project_cues(project)):
+    for rel, pos, vol, ts, te in take_entries(project, project_cues(project)):
         p = project.resolve(rel)
         if p and p.exists():
-            takes.append((p, pos, vol))
+            takes.append((p, pos, vol, ts, te))
     output = Path(output)
     tmp = output.with_name(output.stem + ".part" + output.suffix)
     args = build_bgm_stem(project, timeline.total, bgm_path, probe(bgm_path).duration, takes, tmp)

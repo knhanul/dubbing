@@ -43,6 +43,7 @@ class Hit:
 
 class TimelineCanvas(QWidget):
     seek_requested = Signal(float)
+    context_requested = Signal(object, float)  # (화면 좌표, 타임라인 초) — 오른쪽 클릭 메뉴
     files_dropped = Signal(list, int)  # 탐색기에서 끌어온 경로들, 클립 삽입 위치
 
     def __init__(self, model: ProjectModel, parent=None):
@@ -54,6 +55,8 @@ class TimelineCanvas(QWidget):
         self.setMinimumHeight(RULER_H + sum(t[2] for t in TRACKS) + 8)
         self._drag: Optional[dict] = None
         self._hover: Optional[Hit] = None  # 마우스가 올라간 가장자리(강조 표시)
+        self.mark_in: Optional[float] = None  # 구간 잘라내기 In / Out (눈금자에 표시)
+        self.mark_out: Optional[float] = None
         self.empty_hint = ""  # 클립이 없을 때 가운데 안내
         self.drop_hint: Optional[dict] = None  # 드롭 위치 표시 {"index": n, "x": px, "text": str}
         self.setAcceptDrops(True)
@@ -101,20 +104,30 @@ class TimelineCanvas(QWidget):
         r = self.track_rect("clip")
         for c in m.timeline.clips:
             yield "clip", c.index, QRectF(self.x_of(c.start), r.top() + 3, c.duration * self.pps, r.height() - 6)
+        for c in m.timeline.clips:  # 전환 = 경계 가운데에 걸친 작은 블록 (트랙 아래쪽 일부 높이만)
+            if c.index > 0 and c.transition_in.duration > 0:
+                yield "transition", c.index, self.transition_rect(c.start, c.transition_in.duration)
         r = self.track_rect("subtitle")
         for cue in m.cues:
             yield "subtitle", cue.index, QRectF(self.x_of(cue.start), r.top() + 3, max(2, cue.duration * self.pps),
                                                 r.height() - 6)
         r = self.track_rect("take")
         for i, (take, pos) in enumerate(zip(m.project.dubbing.takes, m.take_positions())):
-            length = self._take_len(take)
-            yield "take", i, QRectF(self.x_of(pos), r.top() + 3, max(4, length * self.pps), r.height() - 6)
+            ts = float(take.trim_start or 0.0)  # 자르기로 나눈 더빙은 파일 안 일부 구간만
+            te = take.trim_end if take.trim_end is not None else self._take_len(take)
+            yield "take", i, QRectF(self.x_of(pos + ts), r.top() + 3, max(4, (te - ts) * self.pps), r.height() - 6)
         if m.project.bgm.file:
             r = self.track_rect("bgm")
             b = m.project.bgm
             end = m.timeline.total
             yield "bgm", 0, QRectF(self.x_of(b.start_offset), r.top() + 3,
                                    max(4, (end - b.start_offset) * self.pps), r.height() - 6)
+
+    def transition_rect(self, boundary: float, d: float) -> QRectF:
+        r = self.track_rect("clip")
+        h = (r.height() - 6) * 0.42
+        w = max(14.0, d * self.pps)
+        return QRectF(self.x_of(boundary) - w / 2, r.bottom() - 3 - h, w, h)
 
     def _take_len(self, take) -> float:
         from ..probe import probe
@@ -130,8 +143,18 @@ class TimelineCanvas(QWidget):
         가장자리가 여럿이면 마우스에 가장 가까운 것, 몸통은 나중 항목(위에 그려진 것) 우선."""
         body, edges = None, []
         x = pos.x()
-        for kind, idx, rect in self._items():
-            if not (rect.top() <= pos.y() <= rect.bottom()):
+        items = list(self._items())
+        # 전환 블록(트랙 아래쪽)이 먼저: 양 끝 = 길이, 가운데 = 고르기. 위쪽 절반에서는 클립 끝을 잡음
+        for kind, idx, rect in items:
+            if kind == "transition" and rect.adjusted(-3, 0, 3, 0).contains(pos):
+                ew = min(EDGE, rect.width() / 3)
+                if x <= rect.left() + ew:
+                    return Hit(kind, idx, "left")
+                if x >= rect.right() - ew:
+                    return Hit(kind, idx, "right")
+                return Hit(kind, idx, "body")
+        for kind, idx, rect in items:
+            if kind == "transition" or not (rect.top() <= pos.y() <= rect.bottom()):
                 continue
             if kind in ("clip", "subtitle"):
                 ew = min(EDGE, max(2.0, rect.width() / 3))  # 아주 짧은 막대는 가운데를 몸통으로 남김
@@ -183,6 +206,8 @@ class TimelineCanvas(QWidget):
 
         colors = {"clip": "#3d6fb6", "subtitle": "#c98a2b", "take": "#3fa36b", "bgm": "#8a5bc2"}
         for kind, idx, rect in self._items():
+            if kind == "transition":
+                continue
             p.setOpacity(0.32 if dimmed(pr, KIND_TRACK[kind]) else 1.0)
             selected = sel.kind == kind and sel.index == idx
             base = QColor(colors[kind])
@@ -196,10 +221,6 @@ class TimelineCanvas(QWidget):
             if kind == "clip":
                 c = m.project.clips[idx]
                 tm = m.timeline.clips[idx]
-                tr = tm.transition_in
-                if tr.duration > 0:
-                    ov = QRectF(rect.left(), rect.top(), tr.duration * self.pps, rect.height())
-                    p.fillRect(ov, QBrush(QColor(255, 255, 255, 50), Qt.BDiagPattern))
                 text = f"{idx + 1}. {c.label or c.file}\n{tm.duration:.2f}초"
                 if abs(tm.speed - 1) > 1e-3:
                     text += f"  ×{tm.speed:.2f}"
@@ -218,7 +239,7 @@ class TimelineCanvas(QWidget):
             p.drawText(rect.adjusted(5, 2, -3, -2), Qt.AlignLeft | Qt.AlignVCenter, text)
             p.restore()
         p.setOpacity(1.0)
-        self._paint_overlaps(p, colors)
+        self._paint_transitions(p)
         if self._hover is not None:  # 잡을 수 있는 가장자리 강조
             for kind, idx, rect in self._items():
                 if kind == self._hover.kind and idx == self._hover.index:
@@ -266,45 +287,55 @@ class TimelineCanvas(QWidget):
             p.setPen(QColor("#4dd2ff"))
             p.drawText(box, Qt.AlignCenter, h["text"])
 
+        # 구간 잘라내기 In/Out
+        if self.mark_in is not None or self.mark_out is not None:
+            a = self.mark_in if self.mark_in is not None else 0.0
+            b = self.mark_out if self.mark_out is not None else max(a, self.model.timeline.total)
+            if self.mark_in is not None and self.mark_out is not None:
+                p.fillRect(QRectF(self.x_of(a), RULER_H, (b - a) * self.pps, self.height() - RULER_H),
+                           QColor(255, 82, 82, 38))
+                p.fillRect(QRectF(self.x_of(a), RULER_H - 5, (b - a) * self.pps, 5), QColor("#ff5252"))
+            f4 = QFont(self.font()); f4.setPointSizeF(8); f4.setBold(True)
+            p.setFont(f4)
+            for t, lab in ((self.mark_in, "In"), (self.mark_out, "Out")):
+                if t is None:
+                    continue
+                x = self.x_of(t)
+                p.setPen(QPen(QColor("#ff5252"), 2))
+                p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor("#ff5252"))
+                w = 22 if lab == "In" else 28
+                p.drawRect(QRectF(x if lab == "In" else x - w, 0, w, 13))
+                p.setPen(QColor("#ffffff"))
+                p.drawText(QRectF(x if lab == "In" else x - w, 0, w, 13), Qt.AlignCenter, lab)
+
         # 재생 위치
         x = self.x_of(self.playhead)
         p.setPen(QPen(QColor("#ff4d4d"), 2))
         p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
         p.end()
 
-    def _paint_overlaps(self, p: QPainter, colors: dict):
-        """전환으로 겹친 구간: 위 절반 = 앞 클립, 아래 절반 = 뒤 클립. 앞 클립 끝선·뒤 클립 시작선을 또렷이."""
+    def _paint_transitions(self, p: QPainter):
+        """전환 블록: 경계 가운데에 걸친 작은 상자(이름 + 길이). 클립들은 맞닿게 그려짐."""
         m = self.model
-        tl = m.timeline.clips
-        rects = {idx: rect for kind, idx, rect in self._items() if kind == "clip"}
         pr = m.project
-        p.setOpacity(0.32 if dimmed(pr, KIND_TRACK["clip"]) else 1.0)
-        for i in range(1, len(tl)):
-            tr = tl[i].transition_in.duration
-            if tr <= 0 or i not in rects or i - 1 not in rects:
+        p.setOpacity(0.32 if dimmed(pr, "clips") else 1.0)
+        f = QFont(self.font()); f.setPointSizeF(7.5)
+        p.setFont(f)
+        short = {"fade": "페이드", "crossfade": "크로스", "none": ""}
+        for kind, idx, rect in self._items():
+            if kind != "transition":
                 continue
-            a, b = rects[i - 1], rects[i]
-            ov = QRectF(b.left(), b.top(), max(1.0, a.right() - b.left()), b.height())
-            if ov.width() <= 1:
-                continue
-            prev_col = QColor("#4b7f9c") if pr.clips[i - 1].type == "image" else QColor(colors["clip"])
-            if m.selection.kind == "clip" and m.selection.index == i - 1:
-                prev_col = prev_col.lighter(135)
-            top = QRectF(ov.left(), ov.top(), ov.width(), ov.height() / 2)
-            p.fillRect(top, prev_col)
-            p.fillRect(top, QBrush(QColor(255, 255, 255, 40), Qt.BDiagPattern))
-            p.setPen(QPen(QColor(255, 255, 255, 120), 1, Qt.DashLine))
-            p.drawLine(QPointF(ov.left(), ov.center().y()), QPointF(ov.right(), ov.center().y()))
-            p.setPen(QPen(QColor("#ffffff"), 2))  # 앞 클립 끝선(여기를 잡으면 앞 클립 길이)
-            p.drawLine(QPointF(a.right(), a.top()), QPointF(a.right(), ov.center().y()))
-            p.setPen(QPen(QColor("#e8eaed"), 2))  # 뒤 클립 시작선
-            p.drawLine(QPointF(b.left(), ov.center().y()), QPointF(b.left(), b.bottom()))
-            if ov.width() > 34:
-                f = QFont(self.font()); f.setPointSizeF(7.5)
-                p.setFont(f)
-                p.setPen(QColor("#ffffff"))
-                p.drawText(QRectF(ov.left(), ov.center().y(), ov.width(), ov.height() / 2), Qt.AlignCenter,
-                           f"⇄ {tr:.1f}초")
+            tr = m.timeline.clips[idx].transition_in
+            sel = m.selection.kind == "transition" and m.selection.index == idx
+            p.setBrush(QColor("#f1f3f4") if sel else QColor("#c7cbd1"))
+            p.setPen(QPen(QColor("#ffd54f") if sel else QColor("#5f6368"), 2 if sel else 1))
+            p.drawRoundedRect(rect, 3, 3)
+            p.setPen(QColor("#202124"))
+            name = short.get(tr.type, tr.type)
+            text = f"{name} {tr.duration:.1f}" if rect.width() > 52 else (f"{tr.duration:.1f}" if rect.width() > 22 else "")
+            p.drawText(rect, Qt.AlignCenter, text)
         p.setOpacity(1.0)
 
     # --- 마우스 ---
@@ -338,6 +369,10 @@ class TimelineCanvas(QWidget):
                     "speed": self.model.timeline.clips[hit.index].speed,
                     "src_out": self.model.timeline.clips[hit.index].source_out,
                     "src_in": self.model.timeline.clips[hit.index].source_in}
+        if hit.kind == "transition":
+            from ..timeline import effective_transition
+            return {"d": self.model.timeline.clips[hit.index].transition_in.duration,
+                    "type": effective_transition(pr, hit.index).type}
         if hit.kind == "subtitle":
             items = ensure_items(pr)
             it = next(i for i in items if i.index == hit.index)
@@ -386,6 +421,18 @@ class TimelineCanvas(QWidget):
             else:
                 c.trim_end = round(max(c.trim_start + 0.1, o["src_out"] + (new_out - o["out"]) * o["speed"]), 3)
             tip = f"길이 {new_out:.2f}초"
+        elif k == "transition":
+            if d["part"] == "body":
+                return
+            from ..schema import Transition
+            from ..timeline import transition_limit
+            i = d["index"]
+            tl = self.model.timeline.clips
+            lim = transition_limit(tl[i - 1].duration, tl[i].duration)
+            nd = o["d"] + (2 * dt if d["part"] == "right" else -2 * dt)  # 가운데 고정, 양쪽으로 같이 늘고 줄음
+            nd = round(min(lim, max(0.05, snap(nd, fine))), 3)
+            pr.clips[i].transition = Transition(o["type"], nd)
+            tip = f"전환 길이 {nd:.2f}초" + (" (최대: 짧은 쪽 클립 길이)" if nd >= lim - 1e-6 else "")
         elif k == "clip" and d["part"] == "left":
             # 프리미어처럼 왼쪽 끝 잡기: 동영상 = 시작 부분 자르기/되살리기, 이미지 = 길이
             c = pr.clips[d["index"]]
@@ -425,7 +472,7 @@ class TimelineCanvas(QWidget):
         elif k == "bgm":
             pr.bgm.start_offset = max(0.0, snap(o["start"] + dt, fine))
             tip = f"시작 {pr.bgm.start_offset:.2f}초"
-        if k != "clip" or d["part"] in ("left", "right"):
+        if k not in ("clip", "transition") or d["part"] in ("left", "right"):
             self.model.recompute()
             if k == "clip":
                 tip += self._transition_note(d["index"])
@@ -433,7 +480,7 @@ class TimelineCanvas(QWidget):
         self.update()
 
     def _transition_note(self, i: int) -> str:
-        """전환은 앞뒤 클립 중 짧은 쪽의 절반까지만(자동 제한) — 줄었으면 알려 줌."""
+        """전환은 앞뒤 클립 중 짧은 쪽 길이까지만(자동 제한) — 줄었으면 알려 줌."""
         from ..timeline import effective_transition
         tl = self.model.timeline.clips
         notes = []
@@ -444,6 +491,18 @@ class TimelineCanvas(QWidget):
                 if want > got + 1e-3:
                     notes.append(f"전환 {want:.2f}→{got:.2f}초로 자동 줄임")
         return ("\n" + " · ".join(notes)) if notes else ""
+
+    def contextMenuEvent(self, ev):
+        pos = QPointF(ev.pos())
+        t = self.t_of(pos.x())
+        hit = self.hit_test(pos) if pos.y() >= RULER_H else None
+        if hit is not None:
+            self.model.select(hit.kind, hit.index)
+        self.context_requested.emit(ev.globalPos(), t)
+
+    def set_marks(self, a: Optional[float], b: Optional[float]):
+        self.mark_in, self.mark_out = a, b
+        self.update()
 
     def leaveEvent(self, ev):
         if self._hover is not None:

@@ -19,7 +19,7 @@ TRACK_FLAGS = {
 }
 TRACK_LABELS = {"clips": "클립", "subtitle": "자막", "dubbing": "더빙", "bgm": "배경음악"}
 # 타임라인 항목 종류 → 트랙
-KIND_TRACK = {"clip": "clips", "subtitle": "subtitle", "take": "dubbing", "bgm": "bgm"}
+KIND_TRACK = {"clip": "clips", "transition": "clips", "subtitle": "subtitle", "take": "dubbing", "bgm": "bgm"}
 
 
 def any_solo(project: Project) -> bool:

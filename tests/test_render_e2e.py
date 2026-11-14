@@ -59,9 +59,9 @@ def test_full_render_and_cache(media):
     seen = []
     res = render_project(p, media / "out.mp4", RenderSettings(), lambda f, m: seen.append(f))
     info = probe(res.output)
-    # 2 + 1 + 1.5 + 2 - 0.4 - 0.5 = 5.6
-    assert res.duration == pytest.approx(5.6)
-    assert info.duration == pytest.approx(5.6, abs=0.1)
+    # 2 + 1 + 1.5 + 2 = 6.5 (전환은 경계 가운데에 걸치고 전체 길이를 줄이지 않음)
+    assert res.duration == pytest.approx(6.5)
+    assert info.duration == pytest.approx(6.5, abs=0.1)
     assert (info.width, info.height, info.has_audio) == (640, 360, True)
     assert res.clips_rendered == 4 and seen[-1] == 1.0
     assert all(0 <= f <= 1 for f in seen) and seen == sorted(seen)
@@ -85,7 +85,7 @@ def test_draft_render_is_low_res(media):
 
 def test_voice_export(media):
     out = export_voice_wav(_project(media), media / "voice.wav")
-    assert probe(out).duration == pytest.approx(5.6, abs=0.05)
+    assert probe(out).duration == pytest.approx(6.5, abs=0.05)
     assert _rms(out, 3.1, 0.8) > 0.05 and _rms(out, 0.5, 1.0) < 1e-3
 
 
@@ -154,3 +154,15 @@ def test_probe_without_ffprobe_matches(media):
         assert abs(c.duration - a.duration) < 0.05 and c.fps == pytest.approx(25)
     t = parse_ffmpeg_info("  Duration: 00:01:02.50, start: 0\n  Stream #0:0: Video: h264, yuv420p, 1920x1080, 29.97 fps\n")
     assert t.duration == 62.5 and t.width == 1920 and t.fps == 29.97 and not t.has_audio
+
+
+def test_transition_handles_freeze_when_source_runs_out(media):
+    """동영상 앞에 원본 여분이 없으면(trim_start 0) 첫 프레임을 멈춰서 채움 → 전체 길이 = 클립 길이 합."""
+    p = Project.from_dict({
+        "output": {"width": 320, "height": 180, "fps": 25},
+        "transition": {"type": "crossfade", "duration": 1.0},
+        "clips": [{"file": "img1.png", "duration": 2}, {"file": "vid1.mp4"}, {"file": "img2.jpg", "duration": 1}],
+    }, base_dir=media)
+    res = render_project(p, media / "handles.mp4", RenderSettings())
+    assert res.duration == pytest.approx(6.0)  # 2 + 3 + 1
+    assert probe(res.output).duration == pytest.approx(6.0, abs=0.1)

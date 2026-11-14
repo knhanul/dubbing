@@ -128,19 +128,20 @@ def test_assembly_transitions_and_audio():
     plan = build_assembly(p, tl, files, RenderSettings(), Path("out.mp4"), cues, "subs.srt", Path("m.mp3"), 30.0,
                           [(Path("t1.wav"), 0.5, 1.0), (Path("t2.wav"), -0.3, 0.8)])
     g = plan.filter_graph
-    assert plan.total == tl.total == 8.5
+    assert plan.total == tl.total == 10.0  # 클립 길이 합 (전환은 경계 가운데에 걸치고 길이를 줄이지 않음)
     assert "concat=n=2:v=1:a=1" in g  # a→b 전환 없음
-    assert "xfade=transition=wipeleft:duration=1:offset=5" in g  # 3+3-1
-    assert "xfade=transition=fadeblack:duration=0.5:offset=6.5" in g  # 5+2-0.5
+    # 중간 파일에 전환 여분 포함: b=3+0.5, c=0.5+2+0.25, d=0.25+2 → 전환이 경계(6초, 8초) 가운데에 걸침
+    assert "xfade=transition=wipeleft:duration=1:offset=5.5" in g  # 6 - 1/2
+    assert "xfade=transition=fadeblack:duration=0.5:offset=7.75" in g  # 8 - 0.5/2
     assert g.count("acrossfade") == 2
     assert "subtitles=filename=subs.srt:force_style='FontName=Malgun Gothic" in g
     assert "adelay=delays=500:all=1" in g and "atrim=start=0.3" in g and "volume=0.8" in g
     assert "sidechaincompress" in g and "asplit=2" in g
-    assert "afade=t=in:st=0:d=1" in g and "afade=t=out:st=5.5:d=2" in g  # BGM 길이 7.5
+    assert "afade=t=in:st=0:d=1" in g and "afade=t=out:st=7:d=2" in g  # BGM 길이 9
     assert "adelay=delays=1000:all=1" in g
     a = plan.args
     assert a[a.index("-stream_loop") + 1] == "-1" and a.index("-stream_loop") < a.index("m.mp3")
-    assert "alimiter" in g and "-movflags" in a and a[a.index("-t") + 1] == "8.5"
+    assert "alimiter" in g and "-movflags" in a and a[a.index("-t") + 1] == "10"
     # 모든 라벨이 정의된 뒤 사용되는지 (간단한 그래프 검사)
     defined = set()
     for stmt in g.split(";"):

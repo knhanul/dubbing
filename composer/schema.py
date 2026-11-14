@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Optional
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # 2: 전환을 경계 가운데에 걸침(클립 맞닿음). 1: 겹쳐 놓기(열 때 자동 변환)
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".wmv"}
@@ -38,7 +38,7 @@ TRANSITIONS = [
     "dissolve", "smoothleft", "smoothright", "radial", "zoomin",
 ]
 TRANSITION_LABELS = {
-    "none": "없음(바로 전환)", "fade": "페이드(검은 화면)", "crossfade": "크로스페이드(겹침)",
+    "none": "없음(바로 전환)", "fade": "페이드(검은 화면)", "crossfade": "크로스페이드(서서히 바뀜)",
 }
 FITS = ["cover", "contain"]  # cover = 꽉 채우고 잘라냄, contain = 레터박스(여백)
 
@@ -81,6 +81,8 @@ class Clip:
     motion: str = "none"
     motion_strength: float = 0.15
     motion_easing: str = "ease"
+    motion_from: float = 0.0  # 움직임 경로 중 이 클립이 쓰는 구간(0~1). 자르기로 나눈 이미지가 이어지게
+    motion_to: float = 1.0
     speed: float = 1.0
     fit_duration: Optional[float] = None  # 지정하면 이 길이에 맞도록 속도 자동 계산
     trim_start: float = 0.0
@@ -184,6 +186,8 @@ class Take:
     subtitle: Optional[int] = None  # 자막 번호. None 이면 offset 이 절대 시간
     offset: float = 0.0  # 자막 시작 기준 상대 위치(초). 음수 = 프리롤 포함 녹음
     volume: float = 1.0
+    trim_start: float = 0.0  # 파일 안에서 쓰는 구간 시작(초) — 자르기로 나눈 더빙(원본 파일은 그대로)
+    trim_end: Optional[float] = None  # 파일 안에서 쓰는 구간 끝(초), None = 파일 끝까지
 
 
 @dataclass
@@ -330,7 +334,8 @@ JSON_SCHEMA: dict = {
     "type": "object",
     "required": ["clips"],
     "properties": {
-        "version": {"type": "integer", "const": SCHEMA_VERSION},
+        "version": {"type": "integer", "enum": [1, SCHEMA_VERSION],
+                    "description": "2 = 전환을 클립 경계 가운데에 걸침(클립은 맞닿음, 전체 길이 = 클립 길이 합). 1 = 예전 겹쳐 놓기(열 때 자동 변환)"},
         "title": {"type": "string"},
         "output": {
             "type": "object",
@@ -359,6 +364,8 @@ JSON_SCHEMA: dict = {
                     "motion": {"type": "string", "enum": MOTIONS},
                     "motion_strength": {"type": "number", "minimum": 0, "maximum": 1},
                     "motion_easing": {"type": "string", "enum": EASINGS},
+                    "motion_from": {"type": "number", "minimum": 0, "maximum": 1},
+                    "motion_to": {"type": "number", "minimum": 0, "maximum": 1},
                     "speed": {"type": "number", "minimum": 0.1, "maximum": 16},
                     "fit_duration": {"type": ["number", "null"], "exclusiveMinimum": 0},
                     "trim_start": {"type": "number", "minimum": 0},
@@ -451,6 +458,8 @@ JSON_SCHEMA: dict = {
                             "subtitle": {"type": ["integer", "null"]},
                             "offset": _num,
                             "volume": {"type": "number", "minimum": 0, "maximum": 4},
+                            "trim_start": {"type": "number", "minimum": 0},
+                            "trim_end": {"type": ["number", "null"], "exclusiveMinimum": 0},
                         },
                         "additionalProperties": False,
                     },
