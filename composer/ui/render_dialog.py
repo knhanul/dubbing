@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from typing import Optional
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
@@ -102,7 +103,8 @@ class ProgressDialog(QDialog):
 
 
 class FinalRenderOptions(QDialog):
-    def __init__(self, default_path: Path, parent=None, width: int = 1920, height: int = 1080, fps: float = 30.0):
+    def __init__(self, default_path: Path, parent=None, width: int = 1920, height: int = 1080, fps: float = 30.0,
+                 warnings: Optional[list] = None):
         super().__init__(parent)
         self.setWindowTitle("영상 내보내기")
         from PySide6.QtWidgets import QDoubleSpinBox, QLabel, QSpinBox
@@ -131,6 +133,15 @@ class FinalRenderOptions(QDialog):
         self.quality.addItem("빠르게 (1배)", 1)
         self.quality.addItem("최고 품질 (3배, 느림)", 3)
         f = QFormLayout(self)
+        self.track_warning = QLabel()
+        self.track_warning.setWordWrap(True)
+        self.track_warning.setStyleSheet("background:#5c3b00; color:#ffe0a3; padding:6px; border-radius:4px;")
+        if warnings:
+            self.track_warning.setText("⚠ 감춰지거나 음소거된 트랙이 있습니다: " + ", ".join(warnings)
+                                       + "<br><small>그대로 내보내면 결과 영상에도 빠집니다. 타임라인 왼쪽 트랙 머리에서 바꿀 수 있습니다.</small>")
+            f.addRow(self.track_warning)
+        else:
+            self.track_warning.hide()
         r = QHBoxLayout(); r.addWidget(self.path, 1); r.addWidget(b)
         f.addRow("저장 위치", r)
         f.addRow("영상 크기", self.size_combo)

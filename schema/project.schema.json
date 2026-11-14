@@ -401,6 +401,85 @@
       },
       "additionalProperties": false
     },
+    "tracks": {
+      "type": "object",
+      "description": "타임라인 트랙 켜고 끄기 (프로그램이 관리, AI 는 쓰지 않아도 됨)",
+      "properties": {
+        "clips": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "hidden": {
+              "type": "boolean"
+            },
+            "muted": {
+              "type": "boolean"
+            },
+            "solo": {
+              "type": "boolean"
+            },
+            "locked": {
+              "type": "boolean"
+            }
+          }
+        },
+        "subtitle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "hidden": {
+              "type": "boolean"
+            },
+            "muted": {
+              "type": "boolean"
+            },
+            "solo": {
+              "type": "boolean"
+            },
+            "locked": {
+              "type": "boolean"
+            }
+          }
+        },
+        "dubbing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "hidden": {
+              "type": "boolean"
+            },
+            "muted": {
+              "type": "boolean"
+            },
+            "solo": {
+              "type": "boolean"
+            },
+            "locked": {
+              "type": "boolean"
+            }
+          }
+        },
+        "bgm": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "hidden": {
+              "type": "boolean"
+            },
+            "muted": {
+              "type": "boolean"
+            },
+            "solo": {
+              "type": "boolean"
+            },
+            "locked": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "dubbing": {
       "type": "object",
       "properties": {

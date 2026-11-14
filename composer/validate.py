@@ -197,7 +197,7 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
     if not isinstance(data, dict):
         v.err("$", "최상위는 JSON 객체 {...} 여야 합니다.")
         return v.issues
-    v.unknown(data, {"version", "title", "output", "transition", "clips", "subtitle", "bgm", "dubbing"}, "$")
+    v.unknown(data, {"version", "title", "output", "transition", "clips", "subtitle", "bgm", "dubbing", "tracks"}, "$")
     if "version" in data and data["version"] != SCHEMA_VERSION:
         v.warn("$.version", f"버전 {SCHEMA_VERSION} 형식으로 해석합니다.")
 
@@ -339,6 +339,22 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
                 v.file(t.get("file"), f"{pp}.file", base, ("audio",))
                 v.num(t, "offset", pp)
                 v.num(t, "volume", pp, 0, 4)
+
+    tr = data.get("tracks")
+    if tr is not None:
+        if not isinstance(tr, dict):
+            v.err("tracks", "객체여야 합니다.")
+        else:
+            v.unknown(tr, {"clips", "subtitle", "dubbing", "bgm"}, "tracks")
+            for k, ts in tr.items():
+                if k not in ("clips", "subtitle", "dubbing", "bgm"):
+                    continue
+                if not isinstance(ts, dict):
+                    v.err(f"tracks.{k}", "객체여야 합니다.")
+                    continue
+                v.unknown(ts, {"hidden", "muted", "solo", "locked"}, f"tracks.{k}")
+                for f in ("hidden", "muted", "solo", "locked"):
+                    v.boolean(ts, f, f"tracks.{k}")
     return v.issues
 
 

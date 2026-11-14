@@ -127,6 +127,7 @@ class PreviewPlayer(QWidget):
         self.subtitle_fn = None  # t -> str
         self.cue_fn = None  # t -> (text, 나타난 뒤 초, 사라지기까지 초, 길이) | None  (있으면 subtitle_fn 대신)
         self._base_volume = 1.0
+        self._track_gain = 1.0  # 🔇/S (클립 원본 소리 트랙)
         self._raw_ms, self._raw_at = -1, 0.0
 
         self.btn_play = QPushButton("▶ 재생")
@@ -317,8 +318,15 @@ class PreviewPlayer(QWidget):
         self._base_volume = max(0.0, min(1.0, factor))
         self._apply_volume()
 
+    def set_track_gain(self, g: float):
+        self._track_gain = max(0.0, min(1.0, g))
+        self._apply_volume()
+
     def _apply_volume(self):
-        self.audio.setVolume(self.vol.value() / 100.0 * self._base_volume)
+        self.audio.setVolume(self.vol.value() / 100.0 * self._base_volume * self._track_gain)
+        cb = getattr(self, "on_volume", None)  # 메인 창: 따로 트는 배경음악도 같이
+        if cb:
+            cb()
 
     # --- 내부 ---
     def _fit(self):

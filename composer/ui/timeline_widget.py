@@ -6,6 +6,7 @@
 * 더빙 테이크·BGM 끌기: 위치 이동
 * 기본 0.1초 단위로 맞춰지며, Shift 를 누르고 끌면 0.01초 단위
 * Ctrl + 휠: 확대/축소
+* 왼쪽 트랙 머리: 👁 감추기 · 🔇 소리 끄기 · S 솔로 · 🔒 잠금 (가로로 스크롤해도 늘 보임)
 """
 from __future__ import annotations
 
@@ -14,15 +15,17 @@ from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import QScrollArea, QToolTip, QWidget
+from PySide6.QtWidgets import QLabel, QScrollArea, QToolButton, QToolTip, QWidget
 
 from ..schema import MOTION_LABELS
 from ..subtitles import ensure_items
+from ..tracks import KIND_TRACK, TRACK_FLAGS, audible, dimmed, locked, visible
 from .model import ProjectModel
 
 RULER_H = 22
-TRACKS = [("clip", "클립", 54), ("subtitle", "자막", 38), ("take", "더빙", 30), ("bgm", "배경음악", 24)]
-LABEL_W = 70
+TRACKS = [("clip", "클립", 54), ("subtitle", "자막", 38), ("take", "더빙", 32), ("bgm", "배경음악", 30)]
+LABEL_W = 8  # 캔버스 왼쪽 여백 (트랙 이름·단추는 TrackHeader 에)
+HEADER_W = 152
 EDGE = 6
 
 
@@ -162,14 +165,17 @@ class TimelineCanvas(QWidget):
             t += step
 
         # 트랙 배경과 이름
+        pr = m.project
         for kind, label, h in TRACKS:
             r = self.track_rect(kind)
-            p.fillRect(r.adjusted(0, 1, 0, 0), QColor("#25272d"))
-            p.setPen(QColor("#c8ccd4"))
-            p.drawText(QRectF(4, r.top(), LABEL_W - 8, r.height()), Qt.AlignVCenter, label)
+            key = KIND_TRACK[kind]
+            p.fillRect(r.adjusted(0, 1, 0, 0), QColor("#1c1d21") if dimmed(pr, key) else QColor("#25272d"))
+            if pr.tracks.get(key).locked:  # 🔒 빗금
+                p.fillRect(r.adjusted(0, 1, 0, 0), QBrush(QColor(255, 255, 255, 18), Qt.BDiagPattern))
 
         colors = {"clip": "#3d6fb6", "subtitle": "#c98a2b", "take": "#3fa36b", "bgm": "#8a5bc2"}
         for kind, idx, rect in self._items():
+            p.setOpacity(0.32 if dimmed(pr, KIND_TRACK[kind]) else 1.0)
             selected = sel.kind == kind and sel.index == idx
             base = QColor(colors[kind])
             if kind == "clip" and m.project.clips[idx].type == "image":
@@ -203,6 +209,7 @@ class TimelineCanvas(QWidget):
             p.setClipRect(rect.adjusted(3, 1, -3, -1))
             p.drawText(rect.adjusted(5, 2, -3, -2), Qt.AlignLeft | Qt.AlignVCenter, text)
             p.restore()
+        p.setOpacity(1.0)
 
         if self.empty_hint and not self.model.project.clips:
             f3 = QFont(self.font())
@@ -257,6 +264,10 @@ class TimelineCanvas(QWidget):
             self.model.select("")
             return
         self.model.select(hit.kind, hit.index)
+        if locked(self.model.project, hit.kind):  # 🔒 고르기만 되고 끌기는 안 됨
+            self._drag = {"kind": "locked"}
+            QToolTip.showText(ev.globalPosition().toPoint(), "🔒 잠긴 트랙입니다 — 왼쪽 트랙 머리의 🔒 를 눌러 풀 수 있습니다", self)
+            return
         self._drag = {"kind": hit.kind, "index": hit.index, "part": hit.part, "x0": pos.x(), "moved": False,
                       "orig": self._orig_values(hit)}
 
@@ -288,6 +299,8 @@ class TimelineCanvas(QWidget):
             return
         if d["kind"] == "seek":
             self.seek_requested.emit(self.t_of(pos.x()))
+            return
+        if d["kind"] == "locked":
             return
         dt = (pos.x() - d["x0"]) / self.pps
         if abs(pos.x() - d["x0"]) < 3 and not d["moved"]:
@@ -341,7 +354,7 @@ class TimelineCanvas(QWidget):
     def mouseReleaseEvent(self, ev):
         d, self._drag = self._drag, None
         self.setCursor(Qt.ArrowCursor)
-        if not d or d["kind"] == "seek" or not d.get("moved"):
+        if not d or d["kind"] in ("seek", "locked") or not d.get("moved"):
             return
         if d["kind"] == "clip" and d["part"] == "body":
             t = self.t_of(d.get("drop_x", d["x0"]))
@@ -434,6 +447,107 @@ class TimelineCanvas(QWidget):
             ev.ignore()
 
 
+FLAG_COL = {"hidden": 0, "muted": 1, "solo": 2, "locked": 3}
+BTN_W, BTN_H = 22, 20
+_BTN_CSS = """
+QToolButton { background:#30333b; color:#c8ccd4; border:1px solid #474b55; border-radius:3px; font-weight:bold;
+              padding:0; }
+QToolButton:hover { border-color:#8ab4f8; }
+QToolButton[flag="hidden"]:checked, QToolButton[flag="muted"]:checked { background:#c0392b; color:#fff;
+              border-color:#ff8a80; }
+QToolButton[flag="solo"]:checked { background:#f2c200; color:#000; border-color:#fff3b0; }
+QToolButton[flag="locked"]:checked { background:#5f6b7a; color:#fff; border-color:#b0bec5; }
+"""
+
+
+def flag_text(flag: str, on: bool) -> str:
+    return {"hidden": "🚫" if on else "👁", "muted": "🔇" if on else "🔊", "solo": "S",
+            "locked": "🔒" if on else "🔓"}[flag]
+
+
+def flag_tip(track: str, flag: str, on: bool, project) -> str:
+    name = {"clips": "클립", "subtitle": "자막", "dubbing": "더빙", "bgm": "배경음악"}[track]
+    if flag == "hidden":
+        what = "화면(영상)" if track == "clips" else "자막"
+        return (f"{name}: {what} 감춤 — 눌러서 다시 보이기" if on else
+                f"{name} 감추기 — 미리보기·내보내기에서 " + ("화면을 검게" if track == "clips" else "자막을 빼고") + " 합니다")
+    if flag == "muted":
+        what = "원본 소리" if track == "clips" else "소리"
+        return f"{name}: {what} 꺼짐 — 눌러서 켜기" if on else f"{name} {what} 끄기 (미리보기·내보내기)"
+    if flag == "solo":
+        tip = (f"{name}: 솔로 켜짐 — 솔로 켠 트랙 소리만 들립니다. 눌러서 끄기" if on else
+               f"{name} 솔로 — 이 트랙(과 솔로 켠 다른 트랙) 소리만 듣기")
+        if not on and not audible(project, track) and not project.tracks.get(track).muted:
+            tip += "\n(지금은 다른 트랙이 솔로라 안 들림)"
+        return tip
+    return f"{name}: 잠김 — 편집·끌기 막힘. 눌러서 풀기" if on else f"{name} 잠그기 — 실수로 바뀌지 않게 편집·끌기를 막습니다"
+
+
+class TrackHeader(QWidget):
+    """트랙 이름과 켜고 끄기 단추 (프리미어처럼). 누를 때마다 되돌리기 한 단계."""
+
+    def __init__(self, model: ProjectModel, parent=None):
+        super().__init__(parent)
+        self.model = model
+        self.setFixedWidth(HEADER_W)
+        self.setStyleSheet(_BTN_CSS)
+        self.buttons: dict[tuple[str, str], QToolButton] = {}
+        self.labels: dict[str, QLabel] = {}
+        y = RULER_H
+        for kind, label, h in TRACKS:
+            key = KIND_TRACK[kind]
+            lb = QLabel(label, self)
+            lb.setGeometry(6, y, HEADER_W - 4 * (BTN_W + 2) - 8, h)
+            lb.setStyleSheet("color:#c8ccd4; background:transparent;")
+            self.labels[key] = lb
+            for flag in TRACK_FLAGS[key]:
+                b = QToolButton(self)
+                b.setCheckable(True)
+                b.setProperty("flag", flag)
+                b.setFocusPolicy(Qt.NoFocus)
+                b.setGeometry(HEADER_W - (4 - FLAG_COL[flag]) * (BTN_W + 2) - 2, y + (h - BTN_H) // 2, BTN_W, BTN_H)
+                b.toggled.connect(lambda on, k=key, f=flag: self.set_flag(k, f, on))
+                self.buttons[(key, flag)] = b
+            y += h
+        model.changed.connect(self.refresh)
+        self.refresh()
+
+    def set_flag(self, key: str, flag: str, on: bool):
+        ts = self.model.project.tracks.get(key)
+        if getattr(ts, flag) == on:
+            return
+        self.model.edit(lambda p: setattr(p.tracks.get(key), flag, on))
+
+    def refresh(self):
+        pr = self.model.project
+        for (key, flag), b in self.buttons.items():
+            on = getattr(pr.tracks.get(key), flag)
+            b.blockSignals(True)
+            b.setChecked(on)
+            b.blockSignals(False)
+            b.setText(flag_text(flag, on))
+            b.setToolTip(flag_tip(key, flag, on, pr))
+        for key, lb in self.labels.items():
+            off = dimmed(pr, key)
+            lb.setStyleSheet(f"color:{'#6b707a' if off else '#c8ccd4'}; background:transparent;"
+                             f"{'text-decoration:line-through;' if not visible(pr, key) else ''}")
+        self.update()
+
+    def paintEvent(self, ev):  # noqa: N802
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor("#1e1f24"))
+        p.fillRect(QRectF(0, 0, self.width(), RULER_H), QColor("#2a2c33"))
+        y = RULER_H
+        pr = self.model.project
+        for kind, _, h in TRACKS:
+            key = KIND_TRACK[kind]
+            p.fillRect(QRectF(0, y + 1, self.width(), h - 1), QColor("#1c1d21") if dimmed(pr, key) else QColor("#2b2d34"))
+            y += h
+        p.setPen(QColor("#3a3d45"))
+        p.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
+        p.end()
+
+
 class TimelineView(QScrollArea):
     def __init__(self, model: ProjectModel, parent=None):
         super().__init__(parent)
@@ -443,10 +557,20 @@ class TimelineView(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.setMinimumHeight(self.canvas.minimumHeight() + 24)
         self.follow = True
+        self.header = TrackHeader(model, self)  # 가로 스크롤과 상관없이 왼쪽에 고정
+        self.setViewportMargins(HEADER_W, 0, 0, 0)
+        self.verticalScrollBar().valueChanged.connect(lambda _: self._place_header())
+
+    def _place_header(self):
+        vp = self.viewport().geometry()
+        self.header.setGeometry(vp.left() - HEADER_W, vp.top() - self.verticalScrollBar().value(), HEADER_W,
+                                max(vp.height(), self.canvas.height()))
+        self.header.raise_()
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         self.canvas.resize(max(self.canvas.minimumWidth(), self.viewport().width()), self.viewport().height())
+        self._place_header()
 
     def set_playhead(self, t: float):
         self.canvas.set_playhead(t)

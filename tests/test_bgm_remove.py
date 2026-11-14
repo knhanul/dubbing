@@ -95,13 +95,17 @@ def test_delete_key_on_selected_bgm_bar(win):
     assert w.model.project.bgm.file == "music.mp3"
 
 
-def test_removal_triggers_auto_preview(win):
+def test_removal_updates_preview_audio(win):
+    """배경음악은 미리보기에서 따로 만든 WAV 로 재생 → 빼면 영상은 그대로 두고 음악만 바로 멈춤."""
     w, folder, app = win
     w.set_project(_proj(folder))
+    assert w.bgm_live.want is not None  # 배경음악 WAV 만드는 중/준비됨
+    w.bgm_live.wait()
+    app.processEvents()
+    assert w.bgm_live.path is not None and w.bgm_live.path.exists()
     w.auto.enabled = True
-    w.auto.rendered_key = w.auto.key_fn()  # 이미 미리보기가 있는 상태
-    assert w.auto.state() == "idle"
+    w.auto.rendered_key = w.auto.key_fn()
     w.remove_bgm()
-    assert w.auto.state() == "waiting"  # 디바운스 후 다시 렌더
-    w.auto.timer.stop()
+    assert w.bgm_live.want is None and w.bgm_live.path is None  # 바로 반영
+    assert w.auto.state() == "idle"  # 영상 미리보기는 다시 만들 필요 없음
     w.auto.enabled = False

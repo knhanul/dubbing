@@ -92,6 +92,8 @@ def render_project(project: Project, output: Path | str, settings: RenderSetting
     if not output.is_absolute():
         output = project.base_dir / output
     output.parent.mkdir(parents=True, exist_ok=True)
+    from ..tracks import effective_project
+    project = effective_project(project)  # 👁/🔇/S 트랙 설정 반영
     if not project.clips:
         raise RenderError("클립이 없습니다.")
     for c in project.clips:
@@ -204,4 +206,30 @@ def export_voice_wav(project: Project, output: Path | str, cancel: Optional[thre
     cdir = cache_dir(project)
     cdir.mkdir(parents=True, exist_ok=True)
     _run_ffmpeg(args, timeline.total, lambda f: None, cancel, cdir / "voice.log")
+    return output
+
+
+def render_bgm_stem(project: Project, output: Path | str, cancel: Optional[threading.Event] = None) -> Optional[Path]:
+    """미리보기용: 배경음악만(더빙 밑 줄이기 포함) WAV. 배경음악이 없으면 None."""
+    from .ffmpeg_builder import build_bgm_stem
+
+    cancel = cancel or threading.Event()
+    bgm_path = project.resolve(project.bgm.file) if project.bgm.file else None
+    if bgm_path is None or not bgm_path.exists() or not project.clips:
+        return None
+    timeline = build_timeline(project, source_duration(project))
+    takes = []
+    for rel, pos, vol in take_entries(project, project_cues(project)):
+        p = project.resolve(rel)
+        if p and p.exists():
+            takes.append((p, pos, vol))
+    output = Path(output)
+    tmp = output.with_name(output.stem + ".part" + output.suffix)
+    args = build_bgm_stem(project, timeline.total, bgm_path, probe(bgm_path).duration, takes, tmp)
+    if args is None:
+        return None
+    cdir = cache_dir(project)
+    cdir.mkdir(parents=True, exist_ok=True)
+    _run_ffmpeg(args, timeline.total, lambda f: None, cancel, cdir / "bgm_stem.log")
+    os.replace(tmp, output)
     return output

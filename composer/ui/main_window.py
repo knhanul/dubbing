@@ -129,6 +129,14 @@ class MainWindow(QMainWindow):
         self.auto.enabled = str(self.settings.value("view/auto_preview", True)).lower() not in ("false", "0")
         self.auto.state_changed.connect(lambda _: self._update_notice())
         self.model.changed.connect(self.auto.notify_changed)
+        # 배경음악은 미리보기에서 따로 재생 (🔇/S 를 바꿔도 영상은 다시 만들지 않음)
+        from .bgm_live import BgmLive
+        self.bgm_live = BgmLive(self)
+        self.player.position_changed.connect(lambda t: self._sync_bgm())
+        self.player.playing_changed.connect(lambda _: self._sync_bgm())
+        self.player.on_volume = self._apply_bgm_volume
+        self.model.changed.connect(self._apply_track_audio)
+        self._apply_track_audio()
         self.player.btn_refresh.clicked.connect(self.render_preview)
 
         self._build_menus()
@@ -260,6 +268,9 @@ class MainWindow(QMainWindow):
         if k == Qt.Key_Home:
             self.player.seek(0)
             return True
+        if k == Qt.Key_Delete and self.model.selection.kind in ("clip", "subtitle", "take", "bgm") \
+                and self._locked_msg(self.model.selection.kind):
+            return True
         if k == Qt.Key_Delete and self.model.selection.kind == "clip":
             self.inspector.clip_page._delete()
             return True
@@ -273,10 +284,39 @@ class MainWindow(QMainWindow):
             return True
         return False
 
+    def _apply_track_audio(self):
+        """🔇/S: 미리보기 소리 크기만 바꿉니다(다시 렌더 없음). 배경음악 WAV 는 설정이 바뀌면 다시 만듦."""
+        from ..tracks import audible
+        p = self.model.project
+        self.player.set_track_gain(1.0 if audible(p, "clips") else 0.0)  # → _apply_bgm_volume 도 불림
+        self.bgm_live.update(p, self.model.timeline.total)
+        self._sync_bgm()
+
+    def _apply_bgm_volume(self):
+        from ..tracks import audible
+        if not hasattr(self, "bgm_live"):
+            return
+        self.bgm_live.set_volume(self.player.vol.value() / 100.0 * self.player._base_volume
+                                 * (1.0 if audible(self.model.project, "bgm") else 0.0))
+
+    def _sync_bgm(self):
+        self.bgm_live.sync(self.player.position(), self.player.is_playing())
+
+    def _locked_msg(self, kind: str) -> bool:
+        """잠긴 트랙이면 상태 표시줄에 알리고 True."""
+        from ..tracks import KIND_TRACK, TRACK_LABELS, locked
+        if kind in KIND_TRACK and locked(self.model.project, kind):
+            self.statusBar().showMessage(f"🔒 {TRACK_LABELS[KIND_TRACK[kind]]} 트랙이 잠겨 있습니다 — "
+                                         "타임라인 왼쪽 트랙 머리의 🔒 를 눌러 푸세요", 6000)
+            return True
+        return False
+
     def nudge_selected(self, d: float):
         from ..subtitles import move_item
 
         s = self.model.selection
+        if self._locked_msg(s.kind):
+            return
         if s.kind == "subtitle":
             self.model.edit(lambda p: move_item(p, s.index, d), "nudge")
         elif s.kind == "take":
@@ -298,12 +338,16 @@ class MainWindow(QMainWindow):
         self.style_panel.sample.replay()
 
     def _cue_at(self, t: float):
+        if self.model.project.tracks.subtitle.hidden:  # 👁 자막 트랙 감춤
+            return None
         c = self.model.cue_timeline.current(t)
         if not c:
             return None
         return c.text, t - c.start, c.end - t, c.end - c.start
 
     def _subtitle_at(self, t: float) -> str:
+        if self.model.project.tracks.subtitle.hidden:
+            return ""
         c = self.model.cue_timeline.current(t)
         return c.text if c else ""
 
@@ -312,6 +356,8 @@ class MainWindow(QMainWindow):
         """미리보기 영상이 없을 때 화면에 보여 줄 현재 클립의 그림 (key, QPixmap)."""
         from PySide6.QtGui import QPixmap
 
+        if self.model.project.tracks.clips.hidden:  # 👁 클립 감춤 → 검은 화면
+            return ("hidden",), None
         tm = self.model.timeline.clip_at(t)
         if tm is None and self.model.timeline.clips:
             tm = self.model.timeline.clips[-1] if t >= self.model.timeline.total else self.model.timeline.clips[0]
@@ -392,7 +438,7 @@ class MainWindow(QMainWindow):
         """프로젝트에서 자막을 모두 뺍니다. 디스크의 자막 파일은 절대 지우지 않습니다."""
         from ..subtitles import clear_subtitles, has_subtitles
 
-        if not has_subtitles(self.model.project):
+        if not has_subtitles(self.model.project) or self._locked_msg("subtitle"):
             return False
         if not self.confirm("자막 전체 제거", "프로젝트에서 자막을 모두 뺄까요? 원본 SRT 파일은 지워지지 않습니다."):
             return False
@@ -408,7 +454,7 @@ class MainWindow(QMainWindow):
 
     def remove_bgm(self) -> bool:
         """프로젝트에서 배경음악을 뺍니다. 디스크의 음악 파일은 절대 지우지 않습니다."""
-        if not self.model.project.bgm.file:
+        if not self.model.project.bgm.file or self._locked_msg("bgm"):
             return False
         if not self.confirm("배경음악 제거", "프로젝트에서 배경음악을 뺄까요? 원본 음악 파일은 지워지지 않습니다."):
             return False
@@ -469,6 +515,8 @@ class MainWindow(QMainWindow):
         d.pop("subtitle", None)
         d.pop("dubbing", None)
         d.pop("title", None)
+        d.pop("bgm", None)  # 배경음악은 따로 만든 WAV 를 같이 틂 (bgm_live)
+        d["tracks"] = {"clips_hidden": d["tracks"]["clips"]["hidden"]}  # 🔇/S 는 소리 크기로 바로 반영
         d["output"].pop("file", None)
         for c in d.get("clips", []):
             c.pop("label", None)
@@ -486,7 +534,7 @@ class MainWindow(QMainWindow):
     def _direct_source(self) -> Optional[Path]:
         """영상 하나뿐이고 변형이 없으면 렌더 없이 원본을 바로 미리보기."""
         p = self.model.project
-        if len(p.clips) != 1 or p.bgm.file:
+        if len(p.clips) != 1 or p.tracks.clips.hidden:
             return None
         c = p.clips[0]
         if c.type != "video" or c.trim_start or c.trim_end or c.fit_duration or abs(c.speed - 1) > 1e-6:
@@ -547,6 +595,8 @@ class MainWindow(QMainWindow):
         """멀티미디어 객체를 앱 종료 전에 정리합니다(종료 시 크래시 방지)."""
         self.auto.enabled = False
         self.auto.timer.stop()
+        if hasattr(self, "bgm_live"):
+            self.bgm_live.shutdown()
         w = getattr(self, "_preview_worker", None)
         if w is not None and w.isRunning():
             w.cancel()
@@ -777,6 +827,17 @@ class MainWindow(QMainWindow):
         if plan.projects:
             notes.append(f"프로젝트 파일({', '.join(p.name for p in plan.projects)})은 다른 파일과 함께 놓으면 열지 않습니다. 따로 끌어 놓으세요.")
 
+        tr = self.model.project.tracks  # 🔒 잠긴 트랙에는 넣지 않음
+        if plan.media and tr.clips.locked:
+            notes.append(f"🔒 클립 트랙이 잠겨 있어 이미지·동영상 {len(plan.media)}개를 넣지 않았습니다.")
+            plan.media, plan.media_given = [], []
+        if plan.subtitles and tr.subtitle.locked:
+            notes.append("🔒 자막 트랙이 잠겨 있어 자막 파일을 넣지 않았습니다.")
+            plan.subtitles = []
+        if plan.audio and tr.bgm.locked:
+            notes.append("🔒 배경음악 트랙이 잠겨 있어 음악 파일을 넣지 않았습니다.")
+            plan.audio = []
+
         p = self.model.project
         if not p.clips and self.model.path is None and not p.subtitle.file and not p.bgm.file:
             base = guess_base_dir(plan)  # 처음 추가하는 미디어의 폴더 = 작업 폴더
@@ -872,6 +933,10 @@ class MainWindow(QMainWindow):
         proj = self.model.project.copy()
         proj.dubbing.takes = []  # 더빙은 미리보기에서 실시간으로 재생
         proj.subtitle = SubtitleSettings()  # 자막은 화면 위에 실시간으로 그림
+        proj.bgm.file = None  # 배경음악은 따로 (bgm_live)
+        for ts in (proj.tracks.clips, proj.tracks.subtitle, proj.tracks.dubbing, proj.tracks.bgm):
+            ts.muted = ts.solo = False  # 소리 켜고 끄기는 재생 볼륨으로
+        proj.tracks.subtitle.hidden = False
         self._preview_seq += 1
         out = cache_dir(proj) / f"preview_{self._preview_seq % 2}.mp4"
         if self.player.media_path is not None and Path(self.player.media_path) == out:
@@ -931,7 +996,8 @@ class MainWindow(QMainWindow):
             return
         default = self.model.project.resolve(self.model.project.output.file or "output.mp4")
         o = self.model.project.output
-        opt = FinalRenderOptions(default, self, o.width, o.height, o.fps)
+        from ..tracks import off_tracks
+        opt = FinalRenderOptions(default, self, o.width, o.height, o.fps, warnings=off_tracks(self.model.project))
         if not self.exec_export_options(opt):
             return
         w, h, fps = opt.output_size()

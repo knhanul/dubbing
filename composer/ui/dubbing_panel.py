@@ -330,7 +330,9 @@ class DubbingPanel(QWidget):
                     mp = self._live_players[self._live_i % len(self._live_players)]
                     self._live_i += 1
                     mp.setSource(QUrl.fromLocalFile(str(path)))
-                    mp.audioOutput().setVolume(min(1.0, take.volume * self.model.project.dubbing.volume))
+                    from ..tracks import audible
+                    gain = 1.0 if audible(self.model.project, "dubbing") else 0.0  # 🔇/S
+                    mp.audioOutput().setVolume(min(1.0, take.volume * self.model.project.dubbing.volume) * gain)
                     if pos < 0:
                         mp.setPosition(int(-pos * 1000))
                     mp.play()

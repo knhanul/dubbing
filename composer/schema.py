@@ -203,6 +203,36 @@ class Dubbing:
 
 
 @dataclass
+class TrackState:
+    """타임라인 트랙(행) 머리의 켜고 끄기. 자막에는 muted/solo 가, 더빙·배경음악에는 hidden 이 쓰이지 않습니다."""
+    hidden: bool = False  # 👁 감추기 (클립: 화면 검게, 자막: 표시·새기기 안 함)
+    muted: bool = False  # 🔇 소리 끄기
+    solo: bool = False  # S 이 트랙 소리만 듣기 (솔로 켠 오디오 트랙끼리만 들림)
+    locked: bool = False  # 🔒 잠금 (편집·끌기 막기)
+
+
+TRACK_KEYS = ("clips", "subtitle", "dubbing", "bgm")
+
+
+@dataclass
+class Tracks:
+    clips: TrackState = field(default_factory=TrackState)
+    subtitle: TrackState = field(default_factory=TrackState)
+    dubbing: TrackState = field(default_factory=TrackState)
+    bgm: TrackState = field(default_factory=TrackState)
+
+    @classmethod
+    def from_dict(cls, d: Any) -> "Tracks":
+        if not isinstance(d, dict):
+            return cls()
+        return cls(**{k: TrackState(**_filter_kwargs(TrackState, d[k])) for k in TRACK_KEYS
+                       if isinstance(d.get(k), dict)})
+
+    def get(self, key: str) -> TrackState:
+        return getattr(self, key)
+
+
+@dataclass
 class Project:
     version: int = SCHEMA_VERSION
     title: str = ""
@@ -212,6 +242,7 @@ class Project:
     subtitle: SubtitleSettings = field(default_factory=SubtitleSettings)
     bgm: BGM = field(default_factory=BGM)
     dubbing: Dubbing = field(default_factory=Dubbing)
+    tracks: Tracks = field(default_factory=Tracks)
 
     # 저장 위치(직렬화하지 않음). 상대 경로 해석 기준.
     base_dir: Path = field(default_factory=Path.cwd, repr=False, compare=False)
@@ -228,6 +259,7 @@ class Project:
             subtitle=SubtitleSettings.from_dict(d.get("subtitle")),
             bgm=BGM.from_dict(d.get("bgm")),
             dubbing=Dubbing.from_dict(d.get("dubbing")),
+            tracks=Tracks.from_dict(d.get("tracks")),
         )
         if base_dir is not None:
             p.base_dir = Path(base_dir)
@@ -393,6 +425,14 @@ JSON_SCHEMA: dict = {
                 "duck_under_voice": {"type": "boolean"},
                 "duck_ratio": {"type": "number", "minimum": 1, "maximum": 20},
             },
+            "additionalProperties": False,
+        },
+        "tracks": {
+            "type": "object",
+            "description": "타임라인 트랙 켜고 끄기 (프로그램이 관리, AI 는 쓰지 않아도 됨)",
+            "properties": {k: {"type": "object", "additionalProperties": False, "properties": {
+                "hidden": {"type": "boolean"}, "muted": {"type": "boolean"},
+                "solo": {"type": "boolean"}, "locked": {"type": "boolean"}}} for k in ("clips", "subtitle", "dubbing", "bgm")},
             "additionalProperties": False,
         },
         "dubbing": {

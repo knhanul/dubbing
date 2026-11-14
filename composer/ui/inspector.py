@@ -447,7 +447,7 @@ class ProjectPage(QWidget):
         ft.addRow("길이", self.tr_dur)
         lay.addWidget(g_tr)
 
-        g_sub = QGroupBox("자막")
+        g_sub = self.g_sub = QGroupBox("자막")
         fs = QFormLayout(g_sub)
         self.sub_file = QLabel("-")
         self.btn_sub = QPushButton("자막 파일 선택…")
@@ -590,7 +590,15 @@ class ProjectPage(QWidget):
         btn.setText(color)
         btn.setStyleSheet(f"background:{color}; color:{'#000' if QColor(color).lightness() > 128 else '#fff'};")
 
+    def _apply_track_locks(self):
+        tr = self.model.project.tracks
+        self.g_bgm.setEnabled(not tr.bgm.locked)
+        self.g_bgm.setTitle("배경음악" + ("  🔒 잠김 (타임라인 트랙 머리에서 풀기)" if tr.bgm.locked else ""))
+        self.g_sub.setEnabled(not tr.subtitle.locked)
+        self.g_sub.setTitle("자막" + ("  🔒 잠김 (타임라인 트랙 머리에서 풀기)" if tr.subtitle.locked else ""))
+
     def refresh(self):
+        self._apply_track_locks()
         self._loading = True
         p = self.model.project
         o = p.output
@@ -659,6 +667,11 @@ class Inspector(QWidget):
             self.stack.addWidget(w)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        self.lock_banner = QLabel("🔒 잠긴 트랙의 항목입니다 — 타임라인 왼쪽 트랙 머리의 🔒 를 눌러 풀면 고칠 수 있습니다.")
+        self.lock_banner.setWordWrap(True)
+        self.lock_banner.setStyleSheet("background:#3b4250; color:#e8eaed; padding:6px; border-radius:4px;")
+        self.lock_banner.hide()
+        lay.addWidget(self.lock_banner)
         lay.addWidget(_scroll(self.stack))
         # 프로젝트 설정 페이지는 여기서 만들지만 메인 창의 '⚙ 출력 설정' 탭에 들어갑니다.
         self.project_page = ProjectPage(model)
@@ -675,11 +688,22 @@ class Inspector(QWidget):
         self.stack.setCurrentWidget(page or self.empty)
         if page:
             page.refresh()
+        self._apply_lock()
 
     def _refresh_current(self):
         w = self.stack.currentWidget()
         if hasattr(w, "refresh"):
             w.refresh()
+        self._apply_lock()
+
+    def _apply_lock(self):
+        from ..tracks import locked
+        w = self.stack.currentWidget()
+        k = self.model.selection.kind
+        is_locked = w is not self.empty and k in ("clip", "subtitle", "take") and locked(self.model.project, k)
+        if w is not self.empty:
+            w.setEnabled(not is_locked)
+        self.lock_banner.setVisible(is_locked)
 
 
 def _scroll(w: QWidget) -> QScrollArea:

@@ -308,6 +308,9 @@ def build_assembly(project: Project, timeline: Timeline, clip_files: list[Path],
 
     burn = settings.burn_subtitles if settings.burn_subtitles is not None else project.subtitle.burn_in
     vlast = cur_v
+    if project.tracks.clips.hidden:  # 👁 클립 트랙 감춤 → 배경색 화면 (자막은 그 위에 새김)
+        g.append(f"[{cur_v}]drawbox=x=0:y=0:w=iw:h=ih:color={project.output.background}@1:t=fill[vhid]")
+        vlast = "vhid"
     if cues and burn and ass_name:
         extra = ""
         if settings.fonts_dir:  # Windows: 설치된 글꼴 폴더도 찾아보게
@@ -325,57 +328,9 @@ def build_assembly(project: Project, timeline: Timeline, clip_files: list[Path],
     idx = n
     g.append(f"[{cur_a}]volume={fmt(project.output.original_volume)}[abase]")
     mix = ["[abase]"]
-    voice_labels = []
-    vol_dub = project.dubbing.volume
-    for j, (path, pos, vol) in enumerate(take_files or []):
-        args += ["-i", str(path)]
-        inputs.append(str(path))
-        chain = [f"aresample={AUDIO_RATE}", "aformat=sample_fmts=fltp:channel_layouts=stereo"]
-        if pos < 0:
-            chain += [f"atrim=start={fmt(-pos)}", "asetpts=PTS-STARTPTS"]
-            pos = 0.0
-        chain.append(f"volume={fmt(vol * vol_dub)}")
-        ms = int(round(pos * 1000))
-        if ms > 0:
-            chain.append(f"adelay=delays={ms}:all=1")
-        g.append(f"[{idx}:a]{','.join(chain)}[t{j}]")
-        voice_labels.append(f"[t{j}]")
-        idx += 1
-    voice = None
-    if voice_labels:
-        if len(voice_labels) == 1:
-            g.append(f"{voice_labels[0]}apad=whole_dur={total_s},atrim=duration={total_s}[voice]")
-        else:
-            g.append(f"{''.join(voice_labels)}amix=inputs={len(voice_labels)}:normalize=0:duration=longest,"
-                     f"apad=whole_dur={total_s},atrim=duration={total_s}[voice]")
-        voice = "voice"
-
+    voice, idx = _voice_graph(project, take_files or [], total, idx, args, inputs, g)
     bgm = project.bgm
-    if bgm_path is not None and bgm.file and bgm.volume > 0 and bgm.start_offset < total:
-        if bgm.loop:
-            args += ["-stream_loop", "-1"]
-        args += ["-i", str(bgm_path)]
-        inputs.append(str(bgm_path))
-        avail = total - bgm.start_offset
-        if not bgm.loop and bgm_duration:
-            avail = min(avail, max(0.1, bgm_duration - bgm.file_start))
-        blen = fmt(avail)
-        chain = []
-        if bgm.file_start > 0:
-            chain.append(f"atrim=start={fmt(bgm.file_start)}")
-        chain += ["asetpts=PTS-STARTPTS", f"aresample={AUDIO_RATE}",
-                  "aformat=sample_fmts=fltp:channel_layouts=stereo", f"atrim=duration={blen}"]
-        if bgm.fade_in > 0:
-            chain.append(f"afade=t=in:st=0:d={fmt(min(bgm.fade_in, avail))}")
-        if bgm.fade_out > 0:
-            fo = min(bgm.fade_out, avail)
-            chain.append(f"afade=t=out:st={fmt(avail - fo)}:d={fmt(fo)}")
-        chain.append(f"volume={fmt(bgm.volume)}")
-        ms = int(round(bgm.start_offset * 1000))
-        if ms > 0:
-            chain.append(f"adelay=delays={ms}:all=1")
-        chain += [f"apad=whole_dur={total_s}", f"atrim=duration={total_s}"]
-        g.append(f"[{idx}:a]{','.join(chain)}[bgm]")
+    if _bgm_graph(project, total, bgm_path, bgm_duration, idx, args, inputs, g):
         idx += 1
         if voice and bgm.duck_under_voice:
             g.append(f"[{voice}]asplit=2[voicemix][voicesc]")
@@ -404,6 +359,90 @@ def build_assembly(project: Project, timeline: Timeline, clip_files: list[Path],
     args += ["-r", fmt(fps), "-c:a", "aac", "-b:a", "128k" if settings.draft else "192k", "-ar", str(AUDIO_RATE),
              "-t", total_s, "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(output)]
     return AssemblyPlan(args, graph, total, inputs)
+
+
+def _voice_graph(project: Project, take_files, total: float, idx: int, args: list, inputs: list,
+                 g: list) -> tuple[Optional[str], int]:
+    """더빙 테이크들을 [voice] 하나로 섞는 필터. (라벨 또는 None, 다음 입력 번호)"""
+    total_s = fmt(total)
+    voice_labels = []
+    for j, (path, pos, vol) in enumerate(take_files):
+        args += ["-i", str(path)]
+        inputs.append(str(path))
+        chain = [f"aresample={AUDIO_RATE}", "aformat=sample_fmts=fltp:channel_layouts=stereo"]
+        if pos < 0:
+            chain += [f"atrim=start={fmt(-pos)}", "asetpts=PTS-STARTPTS"]
+            pos = 0.0
+        chain.append(f"volume={fmt(vol * project.dubbing.volume)}")
+        ms = int(round(pos * 1000))
+        if ms > 0:
+            chain.append(f"adelay=delays={ms}:all=1")
+        g.append(f"[{idx}:a]{','.join(chain)}[t{j}]")
+        voice_labels.append(f"[t{j}]")
+        idx += 1
+    if not voice_labels:
+        return None, idx
+    if len(voice_labels) == 1:
+        g.append(f"{voice_labels[0]}apad=whole_dur={total_s},atrim=duration={total_s}[voice]")
+    else:
+        g.append(f"{''.join(voice_labels)}amix=inputs={len(voice_labels)}:normalize=0:duration=longest,"
+                 f"apad=whole_dur={total_s},atrim=duration={total_s}[voice]")
+    return "voice", idx
+
+
+def _bgm_graph(project: Project, total: float, bgm_path, bgm_duration, idx: int, args: list, inputs: list,
+               g: list) -> bool:
+    """배경음악 입력 하나를 [bgm] 으로 (반복·시작 위치·페이드·볼륨·타임라인 위치). 넣었으면 True."""
+    bgm = project.bgm
+    if not (bgm_path is not None and bgm.file and bgm.volume > 0 and bgm.start_offset < total):
+        return False
+    total_s = fmt(total)
+    if bgm.loop:
+        args += ["-stream_loop", "-1"]
+    args += ["-i", str(bgm_path)]
+    inputs.append(str(bgm_path))
+    avail = total - bgm.start_offset
+    if not bgm.loop and bgm_duration:
+        avail = min(avail, max(0.1, bgm_duration - bgm.file_start))
+    blen = fmt(avail)
+    chain = []
+    if bgm.file_start > 0:
+        chain.append(f"atrim=start={fmt(bgm.file_start)}")
+    chain += ["asetpts=PTS-STARTPTS", f"aresample={AUDIO_RATE}",
+              "aformat=sample_fmts=fltp:channel_layouts=stereo", f"atrim=duration={blen}"]
+    if bgm.fade_in > 0:
+        chain.append(f"afade=t=in:st=0:d={fmt(min(bgm.fade_in, avail))}")
+    if bgm.fade_out > 0:
+        fo = min(bgm.fade_out, avail)
+        chain.append(f"afade=t=out:st={fmt(avail - fo)}:d={fmt(fo)}")
+    chain.append(f"volume={fmt(bgm.volume)}")
+    ms = int(round(bgm.start_offset * 1000))
+    if ms > 0:
+        chain.append(f"adelay=delays={ms}:all=1")
+    chain += [f"apad=whole_dur={total_s}", f"atrim=duration={total_s}"]
+    g.append(f"[{idx}:a]{','.join(chain)}[bgm]")
+    return True
+
+
+def build_bgm_stem(project: Project, total: float, bgm_path: Path, bgm_duration: Optional[float],
+                   take_files: Optional[list[tuple[Path, float, float]]], output: Path) -> Optional[list[str]]:
+    """미리보기용 배경음악만 있는 WAV (더빙 목소리 밑에서 줄이기 포함 — 목소리 자체는 섞지 않음).
+    미리보기에서는 이 파일을 따로 재생하므로 🔇/S 를 바꿔도 영상을 다시 만들 필요가 없습니다."""
+    args = ["-hide_banner", "-y", "-nostdin"]
+    inputs: list[str] = []
+    g: list[str] = []
+    if not _bgm_graph(project, total, bgm_path, bgm_duration, 0, args, inputs, g):
+        return None
+    out = "bgm"
+    if project.bgm.duck_under_voice and take_files:
+        voice, _ = _voice_graph(project, take_files, total, 1, args, inputs, g)
+        if voice:
+            g.append(f"[bgm][{voice}]sidechaincompress=threshold=0.02:ratio={fmt(project.bgm.duck_ratio)}"
+                     f":attack=20:release=400[bgmd]")
+            out = "bgmd"
+    g.append(f"[{out}]atrim=duration={fmt(total)}[aout]")
+    return args + ["-filter_complex", ";".join(g), "-map", "[aout]", "-c:a", "pcm_s16le", "-ar", str(AUDIO_RATE),
+                   "-progress", "pipe:1", "-nostats", str(output)]
 
 
 def take_entries(project: Project, cues: list[Cue]) -> list[tuple[str, float, float]]:

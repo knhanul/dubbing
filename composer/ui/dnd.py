@@ -150,7 +150,7 @@ class ClipListPanel(QWidget):
     def apply_order(self, order: list[int]):
         """order[k] = 새 k 번째 자리에 올 기존 클립 번호."""
         clips = self.model.project.clips
-        if sorted(order) != list(range(len(clips))):
+        if sorted(order) != list(range(len(clips))) or self.model.project.tracks.clips.locked:
             self.refresh()
             return
         sel = self.model.selection
