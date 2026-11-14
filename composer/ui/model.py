@@ -100,6 +100,22 @@ class ProjectModel(QObject):
         self.recompute()
         self.changed.emit()
 
+    def replace_project(self, project: Project) -> None:
+        """프로젝트 내용 전체를 바꿉니다(파일 경로 유지). 실행 취소 한 단계로 기록됩니다.
+        (작업 폴더는 빈 프로젝트일 때만 바뀌므로 되돌려도 문제없습니다.)"""
+        self._undo.append(self._snapshot)
+        if len(self._undo) > 200:
+            self._undo.pop(0)
+        self._redo.clear()
+        self._last_key = None
+        self.project = project
+        self._snapshot = project.to_json()
+        self.revision += 1
+        self._set_dirty(True)
+        self.recompute()
+        self.changed.emit()
+        self.selection_changed.emit()
+
     def edit(self, fn: Callable[[Project], None], merge_key: Optional[str] = None) -> None:
         fn(self.project)
         self.commit(merge_key)

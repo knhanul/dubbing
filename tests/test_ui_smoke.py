@@ -58,10 +58,10 @@ def test_main_window_flow(app, tmp_path):
     assert "img1.png" in dlg.prompt.toPlainText()
     dlg.answer.setPlainText('설명\n```json\n{"clips":[{"file":"img1.png","duration":2,}]}\n```')
     dlg.check()
-    assert dlg.b_open.isEnabled()
+    assert dlg.b_apply.isEnabled()
     dlg.answer.setPlainText('{"clips":[{"file":"nope.png","duration":2}]}')
     dlg.check()
-    assert not dlg.b_open.isEnabled() and "nope.png" in dlg.fix_text
+    assert not dlg.b_apply.isEnabled() and "nope.png" in dlg.fix_text
     w.model._set_dirty(False)
     w.close()
     dlg.deleteLater()

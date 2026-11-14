@@ -97,7 +97,7 @@ class MainWindow(QMainWindow):
         self.key_filter = KeyFilter(self)
         QApplication.instance().installEventFilter(self.key_filter)
         self._title()
-        self.statusBar().showMessage("파일 ▸ 'AI 프롬프트로 새 프로젝트' 또는 '동영상+자막으로 더빙 시작'으로 시작하거나, "
+        self.statusBar().showMessage("'🤖 AI 로 구성하기' 또는 '동영상+자막으로 더빙 시작'으로 시작하거나, "
                                      "탐색기에서 이미지·영상·폴더를 끌어다 놓으세요.")
         QTimer.singleShot(0, self._on_changed)
 
@@ -115,7 +115,7 @@ class MainWindow(QMainWindow):
     def _build_menus(self):
         mb = self.menuBar()
         f = mb.addMenu("파일(&F)")
-        self._act(f, "AI 프롬프트로 새 프로젝트…", self.open_prompt_dialog, "Ctrl+N")
+        self._act(f, "AI 로 구성하기…", self.open_prompt_dialog, "Ctrl+N")
         self._act(f, "빈 프로젝트 (폴더 선택)…", self.new_empty)
         self._act(f, "동영상 + 자막으로 더빙 시작…", self.open_video_for_dubbing, "Ctrl+Shift+O")
         f.addSeparator()
@@ -130,7 +130,7 @@ class MainWindow(QMainWindow):
         self._act(e, "다시 실행", lambda: self.model.redo(), "Ctrl+Y")
         e.addSeparator()
         self._act(e, "클립 추가…", self.add_clips, "Ctrl+I")
-        self._act(e, "AI 답변(JSON) 붙여넣기…", lambda: self.open_prompt_dialog(tab=1), "Ctrl+Shift+V")
+        self._act(e, "AI 답변(JSON) 붙여넣어 적용…", lambda: self.open_prompt_dialog(tab=1), "Ctrl+Shift+V")
         self._act(e, "검사하기 (파일·값 확인)", self.validate_current)
         e.addSeparator()
         self.act_clear_subs = self._act(e, "자막 전체 제거", self.remove_all_subtitles,
@@ -155,7 +155,7 @@ class MainWindow(QMainWindow):
 
         tb = self.addToolBar("주요 기능")
         tb.setMovable(False)
-        for text, slot in [("🤖 AI 프롬프트", self.open_prompt_dialog), ("📂 열기", self.open_project),
+        for text, slot in [("🤖 AI 로 구성하기", self.open_prompt_dialog), ("📂 열기", self.open_project),
                            ("💾 저장", self.save), ("➕ 클립", self.add_clips),
                            ("👁 미리보기 렌더(F5)", self.render_preview), ("🎬 최종 렌더", self.render_final)]:
             a = QAction(text, self)
@@ -260,7 +260,7 @@ class MainWindow(QMainWindow):
 
     def _update_notice(self):
         if not self.model.project.clips:
-            self.player.set_notice("클립이 없습니다 — AI 프롬프트나 '클립 추가'로 시작하세요")
+            self.player.set_notice("클립이 없습니다 — 'AI 로 구성하기'나 '클립 추가'(끌어다 놓기)로 시작하세요")
         elif self.preview_is_direct:
             self.player.set_notice("")
         elif self.player.media_path is None:
@@ -359,17 +359,28 @@ class MainWindow(QMainWindow):
         folder = self.model.project.base_dir if self.model.path or self.model.project.clips else None
         dlg = PromptDialog(folder, self)
         dlg.tabs.setCurrentIndex(tab)
-        dlg.project_ready.connect(self._project_from_ai)
+        dlg.apply_requested.connect(self.apply_ai_result)
         dlg.exec()
 
-    def _project_from_ai(self, project: Project, folder: Path):
-        """AI 프로젝트를 저장 창 없이 '저장 안 된 새 프로젝트'로 바로 엽니다. 저장은 Ctrl+S 로."""
-        if not self.maybe_save():
-            return
-        project.base_dir = Path(folder)
-        self.set_project(project, None, untitled_name="AI 프로젝트")
-        self.model.mark_modified()
-        self.statusBar().showMessage("AI 프로젝트를 열었습니다. F5 로 미리보기를 만드세요. 저장하려면 Ctrl+S", 15000)
+    def apply_ai_result(self, data: dict, folder: Path):
+        """검사를 통과한 AI 결과를 현재 타임라인에 반영합니다. 질문 창 없음 — Ctrl+Z 한 번으로 되돌림.
+        저장된 프로젝트라면 파일 경로를 유지하므로 Ctrl+S 는 같은 파일에 저장합니다."""
+        from ..ai_apply import apply_ai_result, is_blank
+
+        self.dub.stop_live()
+        blank = is_blank(self.model.project, self.model.path is not None)
+        new = apply_ai_result(self.model.project, data, folder, keep_base=not blank)
+        if blank:
+            # 빈 프로젝트: AI 폴더를 작업 폴더로 (되돌리면 다시 빈 상태)
+            self.untitled_name = "AI 프로젝트"
+        self.model.replace_project(new)  # 한 번의 실행 취소 단계
+        self.model.select("")
+        self._load_preview_for_project()  # 이전 미리보기는 '최신 아님'으로 표시
+        self._title()
+        msg = "AI 구성을 타임라인에 반영했습니다. F5 로 미리보기를 만드세요. 되돌리려면 Ctrl+Z"
+        if self.model.path is None:
+            msg += " · 저장하려면 Ctrl+S"
+        self.statusBar().showMessage(msg, 15000)
 
     def new_empty(self):
         if not self.maybe_save():

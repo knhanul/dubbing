@@ -1,11 +1,11 @@
-"""AI 프롬프트 템플릿 + 응답 붙여넣기/검증 + 수정 요청 프롬프트."""
+"""AI 로 구성하기: 프롬프트 만들기 → AI 답변 붙여넣기(자동 검사) → 적용."""
 from __future__ import annotations
 
 import json
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
@@ -14,16 +14,19 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
 from ..prompt_template import build_prompt, media_info_text, scan_folder
-from ..schema import JSON_SCHEMA, Project
-from ..validate import JsonExtractError, correction_prompt, extract_json, has_errors, validate_project
+from ..schema import JSON_SCHEMA
+from ..validate import JsonExtractError, correction_prompt, extract_json, validate_project
 
 
 class PromptDialog(QDialog):
-    project_ready = Signal(object, object)  # Project, folder Path
+    IDLE = "AI 답변을 붙여넣으면 자동으로 검사합니다."
+    OK_TEXT = "✔ 문제 없음 — '적용'을 누르면 타임라인에 반영됩니다."
+
+    apply_requested = Signal(object, object)  # 검사를 통과한 JSON(dict), 작업 폴더 Path
 
     def __init__(self, folder: Optional[Path] = None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("AI 프롬프트 템플릿 — AI 에게 프로젝트 JSON 받기")
+        self.setWindowTitle("AI 로 구성하기 — 프롬프트 복사 → AI 답변 붙여넣기 → 적용")
         self.resize(980, 720)
         self.folder: Optional[Path] = Path(folder) if folder else None
         self.entries = []
@@ -68,7 +71,8 @@ class PromptDialog(QDialog):
         # ---- 2단계 ----
         w2 = QWidget()
         l2 = QVBoxLayout(w2)
-        l2.addWidget(QLabel("AI 의 답변을 통째로 붙여넣으세요. ```json 코드블록이나 설명 문장이 섞여 있어도 JSON 만 찾아냅니다."))
+        l2.addWidget(QLabel("AI 의 답변을 통째로 붙여넣으세요. 붙여넣으면 바로 검사합니다. "
+                            "```json 코드블록이나 설명 문장이 섞여 있어도 JSON 만 찾아냅니다."))
         split = QSplitter(Qt.Vertical)
         self.answer = QPlainTextEdit()
         self.answer.setPlaceholderText("여기에 AI 답변 붙여넣기")
@@ -76,17 +80,21 @@ class PromptDialog(QDialog):
         split.addWidget(self.answer); split.addWidget(self.issues)
         split.setSizes([400, 200])
         l2.addWidget(split, 1)
+        self.status = QLabel(self.IDLE)
+        self.status.setWordWrap(True)
+        l2.addWidget(self.status)
         row2 = QHBoxLayout()
         b_paste = QPushButton("📋 클립보드에서 붙여넣기")
-        b_check = QPushButton("검사하기")
         self.b_fix = QPushButton("수정 요청 프롬프트 복사")
         self.b_fix.setEnabled(False)
-        self.b_open = QPushButton("✔ 이 프로젝트 열기")
-        self.b_open.setEnabled(False)
-        for b in (b_paste, b_check, self.b_fix):
+        self.b_apply = QPushButton("✔ 적용")
+        self.b_apply.setEnabled(False)
+        self.b_apply.setToolTip("현재 타임라인을 AI 결과로 바꿉니다 (Ctrl+Z 로 되돌리기)")
+        self.b_apply.setStyleSheet("QPushButton:enabled{background:#2e7d4f;color:white;font-weight:bold;padding:6px 18px}")
+        for b in (b_paste, self.b_fix):
             row2.addWidget(b)
         row2.addStretch(1)
-        row2.addWidget(self.b_open)
+        row2.addWidget(self.b_apply)
         l2.addLayout(row2)
         self.fix_text = ""
         tabs.addTab(w2, "② AI 답변 붙여넣기")
@@ -98,10 +106,15 @@ class PromptDialog(QDialog):
         b_folder.clicked.connect(self._pick_folder)
         b_gen.clicked.connect(self.generate)
         b_copy.clicked.connect(lambda: self._copy(self.prompt.toPlainText(), "프롬프트를 복사했습니다. Grok 등 AI 에 붙여넣으세요."))
-        b_paste.clicked.connect(lambda: self.answer.setPlainText(QGuiApplication.clipboard().text()))
-        b_check.clicked.connect(self.check)
+        b_paste.clicked.connect(self.paste_from_clipboard)
+        # 입력이 멈추고 0.4초 뒤 자동 검사
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(400)
+        self._debounce.timeout.connect(self.check)
+        self.answer.textChanged.connect(self._text_changed)
         self.b_fix.clicked.connect(lambda: self._copy(self.fix_text, "수정 요청을 복사했습니다. AI 에게 보내고 새 답변을 다시 붙여넣으세요."))
-        self.b_open.clicked.connect(self._open)
+        self.b_apply.clicked.connect(self._apply)
         if self.folder:
             self.generate()
 
@@ -133,41 +146,70 @@ class PromptDialog(QDialog):
         self.prompt.setPlainText(build_prompt(self.entries, self.request.toPlainText(), self.w.value(), self.h.value(),
                                               self.fps.value(), self.target.value() or None, schema))
 
+    def _text_changed(self):
+        # 내용이 바뀌면 이전 검사 결과로 적용하지 못하게 막고 잠시 뒤 다시 검사
+        self.parsed = None
+        self.b_apply.setEnabled(False)
+        self.status.setText("검사 중…" if self.answer.toPlainText().strip() else self.IDLE)
+        self._debounce.start()
+
+    def paste_from_clipboard(self):
+        self.answer.setPlainText(QGuiApplication.clipboard().text())
+        self._debounce.stop()
+        self.check()
+
+    def _set_status(self, text, color):
+        self.status.setText(text)
+        self.status.setStyleSheet(f"color:{color}; font-weight:bold")
+
     def check(self):
+        self._debounce.stop()
         self.issues.clear()
         self.parsed = None
-        self.b_open.setEnabled(False)
-        folder = self._folder()
-        if not folder:
+        self.b_apply.setEnabled(False)
+        self.b_fix.setEnabled(False)
+        text = self.answer.toPlainText()
+        if not text.strip():
+            self._set_status(self.IDLE, "#9aa0aa")
             return
+        t = self.ed_folder.text().strip()
+        if not t or not Path(t).is_dir():
+            self._set_status("작업 폴더를 먼저 선택해 주세요(① 탭).", "#ffd166")
+            return
+        folder = self.folder = Path(t)
         names = [e.name for e in (self.entries or scan_folder(folder))]
         try:
-            data = extract_json(self.answer.toPlainText())
+            data = extract_json(text)
         except JsonExtractError as e:
             self._add(f"[오류] {e}", "#ff6b6b")
             self.fix_text = correction_prompt([], names, parse_error=str(e))
             self.b_fix.setEnabled(True)
+            self._set_status("✖ JSON 을 읽을 수 없습니다 — '수정 요청 프롬프트 복사'로 AI 에게 다시 요청하세요.", "#ff6b6b")
             return
         issues = validate_project(data, folder)
-        if not issues:
-            self._add("✔ 문제 없음! '이 프로젝트 열기'를 누르세요.", "#3fa36b")
         for i in issues:
             self._add(str(i), "#ff6b6b" if i.severity == "error" else "#ffd166")
         self.fix_text = correction_prompt(issues, names) if issues else ""
         self.b_fix.setEnabled(bool(issues))
-        if not has_errors(issues):
-            self.parsed = data
-            self.b_open.setEnabled(True)
-            n = len(data.get("clips", []))
-            self._add(f"클립 {n}개를 읽었습니다.", "#9aa0aa")
+        n_err = sum(1 for i in issues if i.severity == "error")
+        if n_err:
+            self._set_status(f"✖ 오류 {n_err}개 — 아래 목록을 확인하거나 '수정 요청 프롬프트 복사'로 AI 에게 고쳐 달라고 하세요.",
+                             "#ff6b6b")
+            return
+        self.parsed = data
+        self.b_apply.setEnabled(True)
+        n = len(data.get("clips", []))
+        warn = f" (경고 {len(issues)}개는 무시해도 됩니다)" if issues else ""
+        self._set_status(self.OK_TEXT, "#3fa36b")
+        self._add(f"클립 {n}개를 읽었습니다.{warn}", "#9aa0aa")
 
     def _add(self, text, color):
         it = QListWidgetItem(text)
         it.setForeground(QColor(color))
         self.issues.addItem(it)
 
-    def _open(self):
+    def _apply(self):
         if self.parsed is None or self.folder is None:
             return
-        self.project_ready.emit(Project.from_dict(self.parsed, base_dir=self.folder), self.folder)
+        self.apply_requested.emit(self.parsed, self.folder)
         self.accept()
