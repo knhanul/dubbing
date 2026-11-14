@@ -89,9 +89,11 @@ class DubbingPanel(QWidget):
         dl.addLayout(row); dl.addWidget(self.lbl_next); dl.addWidget(self.lbl_next_time)
 
         # --- 녹음 버튼 ---
-        self.btn_rec = QPushButton("● 이 줄 녹음 (R)")
+        self.btn_rec = QPushButton("● 선택 자막 녹음 (R)")
+        self.btn_rec.setToolTip("목록에서 고른 자막 하나를 녹음합니다 — 조금 앞부터 재생, 자막이 끝나면 자동으로 멈춤 (R)")
         self.btn_rec.setStyleSheet("QPushButton{background:#b3261e;color:white;font-weight:bold;padding:6px}")
-        self.btn_session = QPushButton("● 연속 녹음 (Shift+R)")
+        self.btn_session = QPushButton("● 여기부터 연속 녹음 (Shift+R)")
+        self.btn_session.setToolTip("지금 재생 위치부터 영상 끝까지 이어서 녹음합니다 (Shift+R 로 끝내기)")
         self.btn_stop = QPushButton("■ 정지")
         rb = QHBoxLayout()
         for b in (self.btn_rec, self.btn_session, self.btn_stop):
@@ -499,8 +501,8 @@ class DubbingPanel(QWidget):
         self.player.set_volume_factor(self.rec_vol.value() / 100.0)
         self.recorder.start(path)
         self.player.play()
-        self.player.set_notice("● 연속 녹음 중 (Shift+R 로 끝내기)")
-        self.status.emit("연속 녹음 중…")
+        self.player.set_notice("● 여기부터 연속 녹음 중 (Shift+R 로 끝내기)")
+        self.status.emit("여기부터 연속 녹음 중… (Shift+R 또는 정지로 끝내기)")
 
     def start_free_recording(self, play_video: bool = True):
         """자유 녹음: 자막과 상관없이 지금 재생 위치부터 녹음 (영상 재생은 선택)."""

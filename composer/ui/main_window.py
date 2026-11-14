@@ -304,7 +304,7 @@ class MainWindow(QMainWindow):
 
     def show_shortcuts(self):
         QMessageBox.information(self, "단축키", "\n".join([
-            "Space : 재생 / 일시정지 (녹음 중이면 정지)", "R : 선택한 자막 줄 녹음 (녹음 중이면 정지)", "Shift+R : 연속 녹음 시작/정지",
+            "Space : 재생 / 일시정지 (녹음 중이면 정지)", "R : ● 선택 자막 녹음 (녹음 중이면 정지)", "Shift+R : ● 여기부터 연속 녹음 시작/정지",
             "← / → : 이전 / 다음 자막 줄", "Ctrl+← / → : 0.1초 뒤로/앞으로 (Shift 를 더하면 1초)",
             "[ / ] : 선택한 자막·테이크·배경음악을 0.1초 앞당기기/늦추기 (Shift = 0.01초)",
             "V : ↖ 선택 도구   C : ✂ 자르기 도구(누른 곳을 자름)   Esc : 선택 도구로 / In·Out 지우기",
@@ -424,7 +424,7 @@ class MainWindow(QMainWindow):
         sep()
         self.btn_add_tr = b("＋ 전환", "재생 위치에서 가장 가까운 클립 경계에 기본 전환 넣기", self.add_transition_here)
         self.btn_add_sub = b("＋ 자막", "재생 위치에 자막 한 줄 넣기 (2초)", self.add_subtitle_here)
-        self.btn_rec = b("● 녹음 (R)", "녹음 탭으로 가서 녹음 시작 — 자막이 있으면 고른 줄, 없으면 자유 녹음",
+        self.btn_rec = b("● 녹음 (R)", "녹음 탭으로 가서 녹음 시작 — 자막이 있으면 선택 자막 녹음, 없으면 자유 녹음",
                          self.record_from_timeline)
         self.btn_rec.setStyleSheet("QPushButton{color:#ff6b62;font-weight:bold}")
         bar.addStretch(1)
@@ -520,7 +520,7 @@ class MainWindow(QMainWindow):
         return True
 
     def record_from_timeline(self):
-        """● 녹음: 녹음 탭으로 가서 — 자막이 있으면 고른(또는 재생 위치의) 줄 녹음, 없으면 자유 녹음."""
+        """● 녹음: 녹음 탭으로 가서 — 자막이 있으면 선택(또는 재생 위치의) 자막 녹음, 없으면 자유 녹음."""
         if self.dub.mode:
             self.dub.stop_recording()
             return
