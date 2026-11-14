@@ -112,6 +112,7 @@ class MainWindow(QMainWindow):
         self.last_drop_report = ""
         self.inspector.take_page.play_requested.connect(self.dub.play_take)
         self.inspector.project_page.remove_subtitles_requested.connect(self.remove_all_subtitles)
+        self.inspector.project_page.remove_bgm_requested.connect(self.remove_bgm)
         self.inspector.project_page.style_requested.connect(self.show_style_tab)
         self.dub.status.connect(lambda m: self.statusBar().showMessage(m, 6000))
         self.model.changed.connect(self._on_changed)
@@ -185,6 +186,8 @@ class MainWindow(QMainWindow):
         e.addSeparator()
         self.act_clear_subs = self._act(e, "자막 전체 제거", self.remove_all_subtitles,
                                         tip="프로젝트에서 자막을 모두 뺍니다(원본 SRT 파일은 그대로)")
+        self.act_clear_bgm = self._act(e, "배경음악 제거", self.remove_bgm,
+                                       tip="프로젝트에서 배경음악을 뺍니다(원본 음악 파일은 그대로)")
 
         v = mb.addMenu("보기(&V)")
         self._act(v, "타임라인 확대", lambda: self.timeline.canvas.set_zoom(self.timeline.canvas.pps * 1.3), "Ctrl+=")
@@ -264,6 +267,9 @@ class MainWindow(QMainWindow):
             if self.model.cue_by_index(self.model.selection.index) is not None:
                 self.inspector.sub_page._delete()
                 self.statusBar().showMessage("자막 한 줄을 지웠습니다 (Ctrl+Z 로 되돌리기)", 5000)
+            return True
+        if k == Qt.Key_Delete and self.model.selection.kind == "bgm":
+            self.remove_bgm()
             return True
         return False
 
@@ -400,9 +406,23 @@ class MainWindow(QMainWindow):
                                      + (f" · 더빙 {n}개는 지금 위치에 고정" if n else ""), 8000)
         return True
 
+    def remove_bgm(self) -> bool:
+        """프로젝트에서 배경음악을 뺍니다. 디스크의 음악 파일은 절대 지우지 않습니다."""
+        if not self.model.project.bgm.file:
+            return False
+        if not self.confirm("배경음악 제거", "프로젝트에서 배경음악을 뺄까요? 원본 음악 파일은 지워지지 않습니다."):
+            return False
+        self.model.edit(lambda p: setattr(p.bgm, "file", None))  # 한 번의 실행 취소, 다른 설정(볼륨 등)은 남김
+        if self.model.selection.kind == "bgm":
+            self.model.select("")
+        self.statusBar().showMessage("배경음악을 뺐습니다 (Ctrl+Z 로 되돌리기)", 8000)
+        return True
+
     def _on_changed(self):
         from ..subtitles import has_subtitles
 
+        if hasattr(self, "act_clear_bgm"):
+            self.act_clear_bgm.setEnabled(bool(self.model.project.bgm.file))
         if hasattr(self, "act_clear_subs"):
             self.act_clear_subs.setEnabled(has_subtitles(self.model.project))
         self.player.set_timeline_duration(self.model.timeline.total)

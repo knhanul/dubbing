@@ -407,6 +407,7 @@ class ProjectPage(QWidget):
     """출력 / 전역 전환 / 자막 / 배경음악 / 더빙 설정."""
 
     remove_subtitles_requested = Signal()
+    remove_bgm_requested = Signal()
     style_requested = Signal()
 
     def __init__(self, model: ProjectModel):
@@ -469,7 +470,8 @@ class ProjectPage(QWidget):
         fb = QFormLayout(g_bgm)
         self.bgm_file = QLabel("-")
         self.btn_bgm = QPushButton("음악 선택…")
-        self.btn_bgm_clear = QPushButton("빼기")
+        self.btn_bgm_clear = QPushButton("배경음악 제거")
+        self.btn_bgm_clear.setToolTip("프로젝트에서 배경음악을 뺍니다. 원본 음악 파일은 지워지지 않습니다.")
         self.bgm_vol = QDoubleSpinBox(); self.bgm_vol.setRange(0, 4); self.bgm_vol.setSingleStep(0.05)
         self.bgm_start = NudgeSpin(0, 36000)
         self.bgm_fstart = NudgeSpin(0, 36000)
@@ -532,7 +534,7 @@ class ProjectPage(QWidget):
         self.btn_style.clicked.connect(self.style_requested.emit)
         b = lambda: P().bgm  # noqa: E731
         self.btn_bgm.clicked.connect(self._pick_bgm)
-        self.btn_bgm_clear.clicked.connect(lambda: self._set(None, lambda p: setattr(p.bgm, "file", None)))
+        self.btn_bgm_clear.clicked.connect(self.remove_bgm_requested.emit)
         self.bgm_vol.valueChanged.connect(lambda v: self._set("bv", lambda p: setattr(p.bgm, "volume", v)))
         self.bgm_start.valueChanged.connect(lambda v: self._set("bs", lambda p: setattr(p.bgm, "start_offset", v)))
         self.bgm_fstart.valueChanged.connect(lambda v: self._set("bfs", lambda p: setattr(p.bgm, "file_start", v)))
@@ -608,6 +610,7 @@ class ProjectPage(QWidget):
         self.burn.setChecked(st.burn_in)
         b = p.bgm
         self.bgm_file.setText(b.file or "-")
+        self.btn_bgm_clear.setEnabled(bool(b.file))
         self.bgm_vol.setValue(b.volume); self.bgm_start.setValue(b.start_offset); self.bgm_fstart.setValue(b.file_start)
         self.fade_in.setValue(b.fade_in); self.fade_out.setValue(b.fade_out); self.loop.setChecked(b.loop)
         self.duck.setChecked(b.duck_under_voice); self.duck_ratio.setValue(b.duck_ratio)
