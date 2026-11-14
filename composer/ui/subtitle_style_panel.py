@@ -156,11 +156,23 @@ class SubtitleStylePanel(QWidget):
         self.btn_delete_preset = QPushButton("삭제")
         self.btn_import_preset = QPushButton("가져오기…")
         self.btn_export_preset = QPushButton("내보내기…")
-        for b in (self.btn_save_preset, self.btn_rename_preset, self.btn_delete_preset):
-            r.addWidget(b)
+        # 자주 쓰는 '내 스타일로 저장'만 보이고, 나머지는 ⋯ 메뉴 (같은 단추를 메뉴가 눌러 줌)
+        from PySide6.QtWidgets import QMenu, QToolButton
+        r.addWidget(self.btn_save_preset)
         r.addStretch(1)
-        for b in (self.btn_import_preset, self.btn_export_preset):
-            r.addWidget(b)
+        self.btn_more_preset = QToolButton()
+        self.btn_more_preset.setText("⋯ 이름 바꾸기 · 삭제 · 가져오기 · 내보내기")
+        self.btn_more_preset.setPopupMode(QToolButton.InstantPopup)
+        self.preset_menu = QMenu(self.btn_more_preset)
+        self.preset_actions = {}
+        for b in (self.btn_rename_preset, self.btn_delete_preset, self.btn_import_preset, self.btn_export_preset):
+            a = self.preset_menu.addAction(b.text())
+            a.triggered.connect(b.click)
+            self.preset_actions[b.text()] = (a, b)
+        self.preset_menu.aboutToShow.connect(
+            lambda: [a.setEnabled(b.isEnabled()) for a, b in self.preset_actions.values()])
+        self.btn_more_preset.setMenu(self.preset_menu)
+        r.addWidget(self.btn_more_preset)
         pl.addLayout(r)
         outer.addWidget(g_pre)
 
@@ -172,10 +184,15 @@ class SubtitleStylePanel(QWidget):
         row.addWidget(self.btn_replay); row.addStretch(1); row.addWidget(self.btn_reset)
         outer.addLayout(row)
 
-        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QScrollArea.NoFrame)
-        body = QWidget(); lay = QVBoxLayout(body)
-        scroll.setWidget(body)
-        outer.addWidget(scroll, 1)
+        # --- 빠른 조정 (크기 · 위치 · 배경 상자) + ▸ 자세히 (나머지 모두, 펼침 기억) ---
+        from .widgets import Collapsible
+        g_quick = QGroupBox("빠른 조정")
+        quick = QFormLayout(g_quick)
+        outer.addWidget(g_quick)
+        self.more = Collapsible("자세히 — 글꼴 · 색 · 외곽선 · 상자 · 여백 · 나타나기", key="style_more")
+        outer.addWidget(self.more)
+        body = QWidget(); lay = QVBoxLayout(body); lay.setContentsMargins(0, 0, 0, 0)
+        self.more.form.addRow(body)
 
         # --- 글꼴 ---
         g_font = QGroupBox("글꼴")
@@ -192,8 +209,7 @@ class SubtitleStylePanel(QWidget):
         f.addRow("글꼴", self.font_combo)
         f.addRow("", self.korean_only)
         f.addRow("견본", self.font_preview)
-        r = QHBoxLayout(); r.addWidget(self.size); r.addWidget(self.bold); r.addStretch(1)
-        f.addRow("크기", r)
+        f.addRow("", self.bold)
         lay.addWidget(g_font)
 
         # --- 색 ---
@@ -210,7 +226,6 @@ class SubtitleStylePanel(QWidget):
         f.addRow("글자", self.color)
         r = QHBoxLayout(); r.addWidget(self.outline_color); r.addWidget(QLabel("두께")); r.addWidget(self.outline)
         f.addRow("외곽선", r)
-        f.addRow("", self.box)
         f.addRow("상자 색", self.box_color)
         r = QHBoxLayout(); r.addWidget(self.box_opacity, 1); r.addWidget(self.box_opacity_lbl)
         f.addRow("상자 불투명도", r)
@@ -225,8 +240,10 @@ class SubtitleStylePanel(QWidget):
             self.position.addItem(v, k)
         self.margin = QSpinBox(); self.margin.setRange(0, 2000); self.margin.setSuffix(" px")
         self.margin.setToolTip("아래/위에 둘 때 화면 가장자리에서 떨어진 거리 (출력 영상 기준 픽셀)")
-        f.addRow("자리", self.position)
         f.addRow("가장자리 여백", self.margin)
+        quick.addRow("크기", self.size)
+        quick.addRow("위치", self.position)
+        quick.addRow("", self.box)
         lay.addWidget(g_pos)
 
         # --- 나타나기 ---
@@ -245,8 +262,8 @@ class SubtitleStylePanel(QWidget):
         self.note = QLabel()
         self.note.setWordWrap(True)
         self.note.setStyleSheet("color:#9aa0a6;")
-        lay.addWidget(self.note)
-        lay.addStretch(1)
+        outer.addWidget(self.note)
+        outer.addStretch(1)
 
         self._connect()
         self._apply_writing_system()

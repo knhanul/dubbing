@@ -69,8 +69,8 @@ def win(tmp_path, monkeypatch):
     make_media(tmp_path)
     w = mw.MainWindow()
     w.shown_messages = shown
-    w.clip_panel.image_duration.setValue(3.0)
-    w.clip_panel.image_motion.setCurrentIndex(w.clip_panel.image_motion.findData("none"))
+    w.image_defaults.image_duration.setValue(3.0)
+    w.image_defaults.image_motion.setCurrentIndex(w.image_defaults.image_motion.findData("none"))
     w.show()
     app.processEvents()
     yield w
@@ -196,28 +196,25 @@ def test_drop_folder(win, tmp_path):
     assert win.model.project.base_dir == d
 
 
-def test_clip_list_reorder_and_external_drop(win, tmp_path):
+def test_clip_reorder_by_timeline_drag(win, tmp_path):
+    """🎞 클립 목록 탭은 없어졌고, 순서 바꾸기는 타임라인에서 끌어서 (되돌리기 한 번)."""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
     p = Project.from_dict({"clips": [{"file": "img1.png", "duration": 1}, {"file": "img2.jpg", "duration": 1},
-                                     {"file": "vid1.mp4"}]}, base_dir=tmp_path)
+                                     {"file": "vid1.mp4"}], "transition": {"type": "none", "duration": 0}}, base_dir=tmp_path)
     win.set_project(p)
-    lst = win.clip_panel.list
-    assert lst.count() == 3 and lst.dragDropMode() == lst.DragDropMode.InternalMove
-    # 끌어서 순서 바꾸기 (마지막 → 맨 앞)
-    lst.insertItem(0, lst.takeItem(2))
-    lst.emit_order()
-    assert [c.file for c in win.model.project.clips] == ["vid1.mp4", "img1.png", "img2.jpg"]
-    assert lst.item(0).text().startswith("1. ")  # 목록 다시 그림
+    c = win.timeline.canvas
+    c.magnet = False
+    rects = {i: r for k, i, r in c._items() if k == "clip"}
+    src = rects[2].center().toPoint()
+    dst = QPoint(int(rects[0].left()) + 3, src.y())
+    QTest.mousePress(c, Qt.LeftButton, Qt.NoModifier, src)
+    for x in range(src.x(), dst.x(), -12):
+        QTest.mouseMove(c, QPoint(x, src.y()))
+    QTest.mouseMove(c, dst)
+    QTest.mouseRelease(c, Qt.LeftButton, Qt.NoModifier, dst)
+    assert [x.file for x in win.model.project.clips] == ["vid1.mp4", "img1.png", "img2.jpg"]
+    assert win.model.selection.kind == "clip" and win.model.selection.index == 0
     win.model.undo()
-    assert [c.file for c in win.model.project.clips] == ["img1.png", "img2.jpg", "vid1.mp4"]
-    # 위/아래 버튼
-    win.model.select("clip", 0)
-    win.clip_panel.list.setCurrentRow(0)
-    win.clip_panel._move(1)
-    assert [c.file for c in win.model.project.clips][:2] == ["img2.jpg", "img1.png"]
-    # 탐색기에서 목록 위에 놓기 → 놓은 줄 위치에 삽입
-    new = _touch(tmp_path, "z.png")
-    rect = lst.visualItemRect(lst.item(1))
-    _, _, drop = _events(rect.center().x(), rect.top() + 1, _mime(new))
-    lst.dropEvent(drop)
-    QApplication.processEvents()  # 드롭 처리는 이벤트가 끝난 뒤
-    assert [c.file for c in win.model.project.clips][1] == "z.png"
+    assert [x.file for x in win.model.project.clips] == ["img1.png", "img2.jpg", "vid1.mp4"]
+    assert not hasattr(win, "clip_panel")

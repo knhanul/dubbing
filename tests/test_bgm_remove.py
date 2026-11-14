@@ -1,4 +1,4 @@
-"""배경음악 제거: 버튼(⚙ 출력 설정) / 편집 메뉴 / 타임라인에서 배경음악 선택 후 Delete."""
+"""배경음악 제거: 버튼(🛠 속성 ▸ 배경음악) / 편집 메뉴 / 타임라인에서 배경음악 선택 후 Delete."""
 import os
 
 import pytest
@@ -48,12 +48,17 @@ def _bgm_bars(w):
 
 def test_button_menu_confirm_undo_and_keep_file(win):
     w, folder, app = win
-    page = w.inspector.project_page
+    ins = w.inspector
+    page = ins.bgm_page  # 🛠 속성 ▸ 배경음악 칸 (막대를 고르면 나옴)
     w.set_project(Project.from_dict({"clips": [{"file": "vid1.mp4"}]}, base_dir=folder))
-    assert not page.btn_bgm_clear.isEnabled() and not w.act_clear_bgm.isEnabled()
+    assert not w.act_clear_bgm.isEnabled()
+    w.model.select("bgm")
+    assert ins.stack.currentWidget() is ins.empty  # 음악이 없으면 빈 화면(＋ 음악 넣기)
     assert w.remove_bgm() is False and w.asked == []
     w.set_project(_proj(folder))
-    assert page.btn_bgm_clear.text() == "배경음악 제거" and page.btn_bgm_clear.isEnabled()
+    w.model.select("bgm")
+    assert ins.stack.currentWidget() is page and w.right.currentWidget() is ins
+    assert page.btn_bgm_clear.text() == "🗑 배경음악 빼기 (Delete)" and page.btn_bgm_clear.isEnabled()
     assert w.act_clear_bgm.text() == "배경음악 제거" and w.act_clear_bgm.isEnabled()
     # 편집 메뉴에서 '자막 전체 제거' 바로 옆
     edit = next(a.menu() for a in w.menuBar().actions() if a.text().startswith("편집"))
@@ -69,8 +74,8 @@ def test_button_menu_confirm_undo_and_keep_file(win):
     page.btn_bgm_clear.click()
     assert w.model.project.bgm.file is None and w.model.dirty
     assert (folder / "music.mp3").exists()  # 파일은 절대 지우지 않음
-    assert not _bgm_bars(w) and page.bgm_file.text() == "-"
-    assert not page.btn_bgm_clear.isEnabled() and not w.act_clear_bgm.isEnabled()
+    assert not _bgm_bars(w) and ins.stack.currentWidget() is ins.empty
+    assert ins.empty.btn_bgm.text() == "♪ 배경음악 넣기" and not w.act_clear_bgm.isEnabled()
     assert "배경음악을 뺐습니다" in w.statusBar().currentMessage()
     assert '"file": null' in w.model.project.to_json() or w.model.project.to_dict()["bgm"].get("file") is None
     # 한 번에 되돌리기 (볼륨 등 설정도 그대로)

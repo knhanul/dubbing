@@ -407,10 +407,15 @@ def _aligner(store):
 def test_free_tab_buttons_and_flow(win, monkeypatch):
     w, d, app = win
     fp = w.dub.free_page
-    assert w.dub.mode_tabs.tabText(0) == "🎤 자막 따라 녹음" and w.dub.mode_tabs.tabText(1) == "🎙 자유 녹음 (대본 먼저)"
+    assert w.dub.btn_mode_follow.text() == "🎤 자막 따라 녹음" and w.dub.btn_mode_free.text() == "🎙 자유 녹음 (대본 먼저)"
+    w.dub.btn_mode_free.click()
+    assert w.dub.mode_tabs.currentWidget() is fp and w.dub.btn_mode_free.isChecked()
+    assert fp.opts.body.isHidden()  # 자막 만들기 옵션은 접혀 있음
+    sfp = w.inspector.sub_file_panel
     assert fp.btn_rec.text() == "● 자유 녹음 시작" and fp.btn_import.text() == "📂 음성 파일 불러오기…"
     assert fp.btn_make.text() == "🎙→📝 더빙으로 자막 만들기" and not fp.btn_make.isEnabled()
-    assert not fp.btn_save_srt.isEnabled() and fp.whisper_model.currentData() == "small"
+    assert not sfp.btn_sub_export.isEnabled() and fp.whisper_model.currentData() == "small"
+    assert not hasattr(fp, "btn_save_srt")  # SRT 저장은 🅰 자막 탭 한 곳에
     # 대본 → 텔레프롬프터
     fp.script.setPlainText("첫 번째 문장입니다. 두 번째 문장이에요.")
     assert "두 번째 문장이에요." in fp.prompter.toPlainText()
@@ -442,7 +447,8 @@ def test_free_tab_buttons_and_flow(win, monkeypatch):
     assert [c.text for c in cues] == ["첫 번째 문장입니다.", "두 번째 문장이에요."]
     assert cues[0].start == pytest.approx(1.0, abs=0.06) and cues[1].start == pytest.approx(2.6, abs=0.06)
     assert w.model.project.subtitle.items and w.model.project.subtitle.file is None
-    assert "자막 2줄" in fp.lbl_result.text() and fp.btn_save_srt.isEnabled() and fp.btn_align.isEnabled()
+    assert "자막 2줄" in fp.lbl_result.text() and sfp.btn_sub_export.isEnabled() and fp.btn_align.isEnabled()
+    assert "🅰 자막 탭" in fp.lbl_result.text()
     # 취소하면 자막을 넣지 않음
     fp.open_aligner = lambda *a: None
     before = list(w.model.cues)
@@ -467,6 +473,7 @@ def test_free_tab_buttons_and_flow(win, monkeypatch):
     fp.ask_srt_path = lambda: d / "out.srt"
     out = fp.save_srt()
     assert "첫 번째 문장입니다." in out.read_text(encoding="utf-8-sig")
+    assert sfp.export_sub(str(d / "out2.srt")) and "두 번째 문장이에요." in (d / "out2.srt").read_text(encoding="utf-8")
 
 
 def test_replace_confirm_import_audio_and_long_warning(win):

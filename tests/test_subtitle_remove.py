@@ -65,7 +65,7 @@ def win(tmp_path):
 
 def test_remove_all_button_menu_confirm_and_undo(win):
     w, folder, app = win
-    page = w.inspector.project_page
+    page = w.inspector.sub_file_panel  # 🅰 자막 탭 맨 위
     w.set_project(Project.from_dict({"clips": [{"file": "vid1.mp4"}]}, base_dir=folder))
     assert not page.btn_sub_clear.isEnabled() and not w.act_clear_subs.isEnabled()
     assert w.remove_all_subtitles() is False and w.asked == []  # 자막 없으면 아무 일 없음

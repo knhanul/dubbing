@@ -149,5 +149,5 @@ def test_apply_on_blank_project_is_unsaved_and_save_defaults(win, monkeypatch):
 def test_menu_and_toolbar_texts(win):
     w, mw, folder, app = win
     texts = [a.text() for a in w.findChildren(mw.QAction)]
-    assert "AI 로 구성하기…" in texts and "🤖 AI 로 구성하기" in texts
+    assert "🤖 AI 로 구성하기…" in texts and "🤖 AI 로 구성하기" in texts
     assert not any("AI 프롬프트" in t for t in texts)

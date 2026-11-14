@@ -29,7 +29,9 @@ def _quiet_settings(tmp_path_factory, monkeypatch):
     s = QSettings("knhanul", "VideoComposer")
     s.setValue("view/auto_preview", False)
     s.setValue("file/recent", [])
-    s.setValue("import/skip_order_dialog", True)  # 순서 정하기 창은 tests/test_drop_order.py 에서 따로
+    s.setValue("import/skip_order_dialog", True)
+    s.remove("ui/fold")  # 접기 칸은 기본(접힘)으로 시작
+    s.remove("timeline")  # 🧲 자석 기본(켜짐)  # 순서 정하기 창은 tests/test_drop_order.py 에서 따로
     s.sync()
     # 내 자막 스타일(subtitle_presets.json)은 테스트마다 빈 임시 폴더에
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path_factory.mktemp("localappdata")))

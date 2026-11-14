@@ -1,4 +1,4 @@
-"""'⚙ 출력 설정' 탭(항상 보임), 영상 크기 목록, 미세 조정 탭 안내, 내보내기 창의 크기·fps 연동."""
+"""'📤 출력' 탭(항상 보임), 영상 크기 카드·목록, 속성 탭 빈 화면과 탭 자동 전환, 내보내기 창의 크기·fps 연동."""
 import pytest
 from PySide6.QtCore import QCoreApplication
 from PySide6.QtWidgets import QApplication
@@ -27,26 +27,40 @@ def _tabs(w):
 
 def test_settings_tab_always_visible_with_size_list(win):
     w = win
-    assert "⚙ 출력 설정" in _tabs(w)
-    page = w.inspector.project_page
-    assert w.settings_scroll.widget() is page
+    assert _tabs(w) == ["🛠 속성", "🎤 녹음", "🅰 자막", "📤 출력"]
+    page = w.inspector.output_page
+    assert w.output_scroll.widget() is page
     items = [page.preset.itemText(i) for i in range(page.preset.count())]
     assert "1920×1080 가로 (유튜브)" in items and "1080×1920 세로 (쇼츠·릴스·틱톡)" in items
     assert items[-1].startswith("직접 입력")
     assert page.preset.currentText() == "1920×1080 가로 (유튜브)"
-    # 프로젝트 전체 설정이 모두 이 탭에
-    for attr in ("w", "h", "fps", "fit", "tr_type", "tr_dur", "bgm_vol", "duck", "dub_vol", "latency", "sub_offset", "burn"):
+    # 크기 카드: 지금 비율이 눌려 있고, 누르면 바뀜 (되돌리기 한 번)
+    assert [b.isChecked() for b in page.size_cards] == [True, False, False]
+    page.size_cards[1].click()
+    assert (w.model.project.output.width, w.model.project.output.height) == (1080, 1920)
+    assert [b.isChecked() for b in page.size_cards] == [False, True, False]
+    w.model.undo()
+    # 출력 설정은 모두 이 탭에 (거의 안 쓰는 것은 ▸ 고급 안, 처음엔 접힘)
+    for attr in ("w", "h", "fps", "fit", "tr_type", "tr_dur", "dub_vol", "latency", "sub_offset", "burn", "soft"):
         assert page.isAncestorOf(getattr(page, attr))
-    # '크기 프리셋' 이라는 말은 없음
+    for attr in ("w", "h", "fps", "bg", "orig_vol", "sub_offset", "latency", "dub_folder"):
+        assert page.adv.body.isAncestorOf(getattr(page, attr))
+    assert page.adv.body.isHidden()
+    assert not hasattr(page, "out_file")  # 파일 이름은 내보내기 창에서 정함
+    assert page.btn_export.text() == "📤 영상 내보내기 (Ctrl+E)"
+    # 자막 넣는 방식
+    page.soft.click()
+    assert w.model.project.subtitle.burn_in is False
+    page.burn.click()
+    assert w.model.project.subtitle.burn_in is True
     from PySide6.QtWidgets import QLabel
     assert not [lab for lab in page.findChildren(QLabel) if "프리셋" in lab.text()]
-    # 미세 조정 탭은 선택 항목만 — 프로젝트 설정 페이지가 그 안에 없음
     assert not w.inspector.isAncestorOf(page)
 
 
 def test_size_preset_changes_project_and_triggers_auto_preview(win):
     w = win
-    page = w.inspector.project_page
+    page = w.inspector.output_page
     w.auto.enabled = True
     w.auto.rendered_key = w._render_revision_key()  # 미리보기가 최신인 상태
     assert not w.auto.busy
@@ -64,29 +78,36 @@ def test_size_preset_changes_project_and_triggers_auto_preview(win):
     assert (w.model.project.output.width, w.model.project.output.height) == (1920, 1080)
 
 
-def test_fine_tune_tab_hint_and_buttons(win):
+def test_property_tab_empty_page_and_auto_switch(win):
     w = win
     ins = w.inspector
     w.model.select("none")
     assert ins.stack.currentWidget() is ins.empty
-    from PySide6.QtWidgets import QLabel
-    text = " ".join(lab.text() for lab in ins.empty.findChildren(QLabel))
-    assert "⚙ 출력 설정" in text and "🅰 자막 스타일" in text
-    ins.btn_settings.click()
-    assert w.right.currentWidget() is w.settings_scroll
-    ins.btn_style.click()
-    assert w.right.currentWidget() is w.style_panel
-    # 클립 고르면 미세 조정, 배경음악 고르면 출력 설정
+    assert "클립 2개" in ins.empty.summary.text()
+    assert [b.text() for b in (ins.empty.btn_ai, ins.empty.btn_add, ins.empty.btn_bgm, ins.empty.btn_sub)] == [
+        "🤖 AI 로 구성하기", "➕ 미디어 추가 (이미지·영상)", "♪ 배경음악 넣기", "📝 자막 파일 불러오기"]
+    asked = []
+    w.ask_bgm_file = lambda: asked.append(1) or ""
+    ins.empty.btn_bgm.click()
+    assert asked == [1]
+    # 고르면 🛠 속성 탭으로 — 클립·전환·배경음악은 언제나
+    w.right.setCurrentWidget(w.output_scroll)
     w.model.select("clip", 0)
-    assert w.right.currentWidget() is w.inspector and ins.stack.currentWidget() is ins.clip_page
-    w.model.select("bgm")
-    assert w.right.currentWidget() is w.settings_scroll
-    # 보기 메뉴
+    assert w.right.currentWidget() is ins and ins.stack.currentWidget() is ins.clip_page
+    w.right.setCurrentWidget(w.sub_scroll)
+    w.model.select("transition", 1)
+    assert w.right.currentWidget() is ins and ins.stack.currentWidget() is ins.tr_page
+    # 녹음 탭에서 자막을 고르면 녹음 탭 그대로 (녹음 흐름)
+    w.right.setCurrentWidget(w.dub_scroll)
+    w.model.select("subtitle", 1)
+    assert w.right.currentWidget() is w.dub_scroll
+    # 자막 칸의 '모양 바꾸기' → 🅰 자막 탭
+    w.right.setCurrentWidget(ins)
+    ins.sub_page.btn_style.click()
+    assert w.right.currentWidget() is w.sub_scroll
+    # 보기 메뉴에 탭 이동 항목은 없음(탭이 늘 보임)
     view_menu = next(a.menu() for a in w.menuBar().actions() if a.text().startswith("보기"))
-    act = next(a for a in view_menu.actions() if a.text().startswith("⚙ 출력 설정"))
-    w.right.setCurrentIndex(0)
-    act.trigger()
-    assert w.right.currentWidget() is w.settings_scroll
+    assert not [a for a in view_menu.actions() if "출력 설정" in a.text() or "자막 스타일" in a.text()]
 
 
 def test_export_dialog_shows_and_syncs_size_fps(win, tmp_path):
@@ -133,7 +154,7 @@ def test_export_dialog_shows_and_syncs_size_fps(win, tmp_path):
     o = w.model.project.output
     assert (o.width, o.height, o.fps) == (1280, 720, 25)
     assert started == {"title": "영상 내보내기", "size": (1280, 720, 25)}
-    assert w.inspector.project_page.preset.currentText().startswith("1280×720")  # 출력 설정 탭과 연동
+    assert w.inspector.output_page.preset.currentText().startswith("1280×720")  # 출력 설정 탭과 연동
     w.model.undo()
     assert (w.model.project.output.width, w.model.project.output.height) == (1920, 1080)
     # 창 단독

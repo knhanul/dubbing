@@ -15,13 +15,13 @@ from PySide6.QtWidgets import (QScrollArea, QSizePolicy, QAbstractSpinBox, QAppl
 from .. import APP_NAME, __version__
 from ..render.ffmpeg_builder import RenderSettings
 from ..render.runner import cache_dir, clear_cache
-from ..schema import Clip, Project, SubtitleSettings, Transition, guess_type
+from ..schema import Clip, Project, SubtitleSettings, Transition
 from ..validate import has_errors, validate_project
 from .auto_preview import AutoPreview
 from .subtitle_style_panel import SubtitleStylePanel
-from .dnd import ClipListPanel, paths_from_mime
+from .dnd import ImageDefaultsDialog, paths_from_mime
 from .dubbing_panel import DubbingPanel
-from .inspector import Inspector, _rel
+from .inspector import Inspector, _rel, set_bgm_file
 from .model import ProjectModel
 from .preview import PreviewPlayer, fmt_time
 from .prompt_dialog import PromptDialog
@@ -67,35 +67,45 @@ class MainWindow(QMainWindow):
         self.inspector = Inspector(self.model)
         self.timeline = TimelineView(self.model)
 
-        self.clip_panel = ClipListPanel(self.model)
+        self.image_defaults = ImageDefaultsDialog(self)  # ➕ 미디어 추가 ▾ ▸ 새 이미지 기본값
+        # 오른쪽: 작업 순서대로 4개 탭 — 🛠 속성 · 🎤 녹음 · 🅰 자막 · 📤 출력
         self.right = QTabWidget()
         # 오른쪽 패널 내용(자막 글 길이 등)이 바뀌어도 위쪽 영역 높이·미리보기 크기에 영향 주지 않게
         self.right.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Ignored)
         self.right.setMinimumWidth(320)
-        self.dub_scroll = QScrollArea()  # 창이 낮아도 더빙 패널이 찌그러지지 않게 (스크롤)
-        self.dub_scroll.setWidgetResizable(True)
-        self.dub_scroll.setFrameShape(QScrollArea.NoFrame)
-        self.dub_scroll.setWidget(self.dub)
-        self.right.addTab(self.dub_scroll, "🎤 더빙 / 자막")
-        self.right.addTab(self.inspector, "🛠 미세 조정")
-        self.right.addTab(self.clip_panel, "🎞 클립 목록")
+
+        def scroll(w):
+            sc = QScrollArea()
+            sc.setWidgetResizable(True)
+            sc.setFrameShape(QScrollArea.NoFrame)
+            sc.setWidget(w)
+            return sc
+        self.dub_scroll = scroll(self.dub)  # 창이 낮아도 녹음 탭이 찌그러지지 않게 (스크롤)
         self.style_panel = SubtitleStylePanel(self.model)
-        self.right.addTab(self.style_panel, "🅰 자막 스타일")
-        # 프로젝트 전체 설정(영상 크기·fps·화면 맞춤·전환·자막 파일·배경음악·더빙) — 항상 보이는 탭
-        self.settings_scroll = QScrollArea()
-        self.settings_scroll.setWidgetResizable(True)
-        self.settings_scroll.setFrameShape(QScrollArea.NoFrame)
-        self.settings_scroll.setWidget(self.inspector.project_page)
-        self.right.addTab(self.settings_scroll, "⚙ 출력 설정")
-        self.inspector.settings_requested.connect(self.show_settings_tab)
+        self.sub_tab = QWidget()
+        sl = QVBoxLayout(self.sub_tab)
+        sl.addWidget(self.inspector.sub_file_panel)
+        sl.addWidget(self.style_panel, 1)
+        self.sub_scroll = scroll(self.sub_tab)
+        self.output_scroll = scroll(self.inspector.output_page)
+        self.right.addTab(self.inspector, "🛠 속성")
+        self.right.addTab(self.dub_scroll, "🎤 녹음")
+        self.right.addTab(self.sub_scroll, "🅰 자막")
+        self.right.addTab(self.output_scroll, "📤 출력")
+        self.right.setTabToolTip(0, "타임라인에서 고른 클립·전환·자막·더빙·배경음악의 설정")
+        self.right.setTabToolTip(1, "마이크 녹음 — 자막 따라 녹음 / 자유 녹음(대본 먼저) · 녹음으로 자막 만들기")
+        self.right.setTabToolTip(2, "자막 파일 불러오기·저장 · 자막 모양(스타일)")
+        self.right.setTabToolTip(3, "영상 크기 · 기본 전환 · 자막 넣는 방식 · 내보내기")
         self.inspector.style_requested.connect(self.show_style_tab)
-        self.right.currentChanged.connect(lambda i: self.dub.ensure_devices() if i == 0 else None)
+        self.right.currentChanged.connect(
+            lambda i: self.dub.ensure_devices() if self.right.widget(i) is self.dub_scroll else None)
         top = QSplitter(Qt.Horizontal)
         top.addWidget(self.player)
         top.addWidget(self.right)
         top.setSizes([900, 560])
         main = QSplitter(Qt.Vertical)
         main.addWidget(top)
+        self._make_actions()
         main.addWidget(self._build_timeline_box())
         main.setSizes([700, 260])
         self.setCentralWidget(main)
@@ -105,16 +115,27 @@ class MainWindow(QMainWindow):
         self.timeline.canvas.context_requested.connect(self._timeline_menu)
         # 드롭 이벤트가 끝난 뒤 처리(드롭 중에 창을 띄우면 Windows 탐색기 끌기가 멈춤)
         self.timeline.canvas.files_dropped.connect(lambda paths, idx: self._drop_later(paths, idx))
-        self.clip_panel.files_dropped.connect(lambda paths, idx: self._drop_later(paths, idx))
         # 탐색기에서 창 어디에 놓아도 받기 (미리보기 화면은 부모 창으로 넘김)
         self.setAcceptDrops(True)
         self.player.view.setAcceptDrops(False)
         self.player.view.viewport().setAcceptDrops(False)
         self.last_drop_report = ""
-        self.inspector.take_page.play_requested.connect(self.dub.play_take)
-        self.inspector.project_page.remove_subtitles_requested.connect(self.remove_all_subtitles)
-        self.inspector.project_page.remove_bgm_requested.connect(self.remove_bgm)
-        self.inspector.project_page.style_requested.connect(self.show_style_tab)
+        ins = self.inspector
+        ins.take_page.play_requested.connect(self.dub.play_take)
+        ins.take_page.rerecord_requested.connect(self.rerecord_take)
+        ins.sub_file_panel.remove_subtitles_requested.connect(self.remove_all_subtitles)
+        ins.bgm_page.remove_requested.connect(self.remove_bgm)
+        ins.bgm_page.pick_requested.connect(lambda: self.add_bgm())
+        ins.output_page.export_requested.connect(self.render_final)
+        ins.output_page.voice_requested.connect(self.export_voice)
+        ins.empty.ai_requested.connect(lambda: self.open_prompt_dialog())
+        ins.empty.add_requested.connect(self.add_clips)
+        ins.empty.bgm_requested.connect(lambda: self.add_bgm())
+        ins.empty.sub_requested.connect(lambda: self.add_subtitle_file())
+        self.dub.script_requested.connect(self.open_script_dialog)
+        self.timeline.canvas.razor_requested.connect(self._razor)
+        self.timeline.canvas.add_requested.connect(
+            lambda k: self.add_bgm() if k == "bgm" else self.add_subtitle_file())
         self.dub.status.connect(lambda m: self.statusBar().showMessage(m, 6000))
         self.model.changed.connect(self._on_changed)
         self.model.selection_changed.connect(self._on_selection)
@@ -159,7 +180,33 @@ class MainWindow(QMainWindow):
         menu.addAction(a)
         return a
 
+    def _make_actions(self):
+        # 여러 곳(메뉴·툴바·타임라인 툴바)에 같은 동작을 하나의 QAction 으로
+        self.act_undo = QAction("↶ 실행 취소", self, shortcut=QKeySequence("Ctrl+Z"), toolTip="실행 취소 (Ctrl+Z)")
+        self.act_undo.triggered.connect(lambda: self.model.undo())
+        self.act_redo = QAction("↷ 다시 실행", self, shortcut=QKeySequence("Ctrl+Y"), toolTip="다시 실행 (Ctrl+Y)")
+        self.act_redo.triggered.connect(lambda: self.model.redo())
+        self.act_export = QAction("📤 영상 내보내기…", self)
+        self.act_export.setShortcut("Ctrl+E")
+        self.act_export.triggered.connect(self.render_final)
+        self.act_export_voice = QAction("목소리만 WAV로 내보내기…", self)
+        self.act_export_voice.triggered.connect(self.export_voice)
+        self.act_follow = QAction("📍 재생 위치 따라가기", self, checkable=True, checked=True)
+        self.act_follow.setToolTip("재생할 때 타임라인이 재생 위치를 따라 움직임")
+        self.act_follow.toggled.connect(lambda c: setattr(self.timeline, "follow", c))
+        self.act_magnet = QAction("🧲 자석", self, checkable=True)
+        self.act_magnet.setToolTip("끌 때 클립 끝·재생 위치·자막 경계·In/Out 에 붙기 (Shift 를 누르고 끌면 끔)")
+        self.act_magnet.setChecked(str(QSettings("knhanul", "VideoComposer").value("timeline/magnet", True)).lower()
+                                   not in ("false", "0"))
+        self.timeline.canvas.magnet = self.act_magnet.isChecked()
+        self.act_magnet.toggled.connect(self._set_magnet)
+        self.act_clear_marks = QAction("In/Out 지우기", self, shortcut=QKeySequence("Esc"))
+        self.act_clear_marks.setShortcutContext(Qt.WidgetShortcut)  # Esc 는 handle_key 에서 (입력 칸과 안 겹치게)
+        self.act_clear_marks.triggered.connect(self.clear_marks)
+
+
     def _build_menus(self):
+        from PySide6.QtWidgets import QMenu, QToolButton
         mb = self.menuBar()
         f = mb.addMenu("파일(&F)")
         self._act(f, "새로 만들기", self.new_project, "Ctrl+N")
@@ -170,79 +217,102 @@ class MainWindow(QMainWindow):
         self._act(f, "저장", self.save, "Ctrl+S")
         self._act(f, "다른 이름으로 저장…", self.save_as, "Ctrl+Shift+S")
         f.addSeparator()
-        # 같은 QAction 을 파일/내보내기 메뉴에 함께 넣음(단축키가 겹치지 않게)
-        self.act_export = QAction("📤 영상 내보내기…", self)
-        self.act_export.setShortcut("Ctrl+E")
-        self.act_export.triggered.connect(self.render_final)
-        self.act_export_voice = QAction("목소리만 WAV로 내보내기…", self)
-        self.act_export_voice.triggered.connect(self.export_voice)
+        self._act(f, "➕ 미디어 추가 (이미지·영상)…", self.add_clips, "Ctrl+I")
+        self._act(f, "♪ 배경음악 넣기…", lambda: self.add_bgm())
+        self._act(f, "📝 자막 파일 불러오기…", lambda: self.add_subtitle_file())
+        f.addSeparator()
         f.addAction(self.act_export)
         f.addAction(self.act_export_voice)
         self._act(f, "📄 대본 출력…", self.open_script_dialog, "Ctrl+P")
         f.addSeparator()
-        self._act(f, "AI 로 구성하기…", self.open_prompt_dialog, "Ctrl+Shift+A")
+        self._act(f, "🤖 AI 로 구성하기…", self.open_prompt_dialog, "Ctrl+Shift+A")
         self._act(f, "동영상 + 자막으로 더빙 시작…", self.open_video_for_dubbing, "Ctrl+Shift+O")
+        f.addSeparator()
+        self._act(f, "캐시 비우기 (미리보기·내보내기 중간 파일)", self.clear_cache)
         f.addSeparator()
         self._act(f, "끝내기", self.close, "Alt+F4")
 
         e = mb.addMenu("편집(&E)")
-        self._act(e, "실행 취소", lambda: self.model.undo(), "Ctrl+Z")
-        self._act(e, "다시 실행", lambda: self.model.redo(), "Ctrl+Y")
+        e.addAction(self.act_undo)
+        e.addAction(self.act_redo)
         e.addSeparator()
-        self._act(e, "클립 추가…", self.add_clips, "Ctrl+I")
         self._act(e, "AI 답변(JSON) 붙여넣어 적용…", lambda: self.open_prompt_dialog(tab=1), "Ctrl+Shift+V")
         self._act(e, "검사하기 (파일·값 확인)", self.validate_current)
         e.addSeparator()
         self._act(e, "✂ 재생 위치에서 자르기", lambda: self.cut_at(), "Ctrl+K")
         self._act(e, "구간 잘라내기 (In~Out)", self.cut_marked_range)
+        e.addAction(self.act_clear_marks)
         e.addSeparator()
         self.act_clear_subs = self._act(e, "자막 전체 제거", self.remove_all_subtitles,
                                         tip="프로젝트에서 자막을 모두 뺍니다(원본 SRT 파일은 그대로)")
         self.act_clear_bgm = self._act(e, "배경음악 제거", self.remove_bgm,
                                        tip="프로젝트에서 배경음악을 뺍니다(원본 음악 파일은 그대로)")
+        e.addSeparator()
+        self._act(e, "새 이미지 기본값…", self.show_image_defaults)
 
         v = mb.addMenu("보기(&V)")
-        self._act(v, "타임라인 확대", lambda: self.timeline.canvas.set_zoom(self.timeline.canvas.pps * 1.3), "Ctrl+=")
-        self._act(v, "타임라인 축소", lambda: self.timeline.canvas.set_zoom(self.timeline.canvas.pps / 1.3), "Ctrl+-")
-        a = self._act(v, "재생 위치 따라가기", lambda c: setattr(self.timeline, "follow", c))
-        a.setCheckable(True); a.setChecked(True)
-        self._act(v, "🅰 자막 스타일", self.show_style_tab, "Ctrl+Shift+T")
-        self._act(v, "⚙ 출력 설정 (영상 크기·fps·전환·음악·더빙)", self.show_settings_tab, "Ctrl+,")
+        self._act(v, "타임라인 확대", self.zoom_in, "Ctrl+=")
+        self._act(v, "타임라인 축소", self.zoom_out, "Ctrl+-")
+        self._act(v, "타임라인 전체 보기", self.zoom_fit, "Ctrl+0")
+        v.addAction(self.act_follow)
+        v.addAction(self.act_magnet)
+        v.addSeparator()
         self.act_auto = QAction("자동 미리보기 (편집하면 알아서 다시 만들기)", self)
         self.act_auto.setCheckable(True)
         self.act_auto.setChecked(self.auto.enabled)
         self.act_auto.toggled.connect(self._on_auto_toggled)
         v.addAction(self.act_auto)
-
-        v.addSeparator()
         self._act(v, "🔄 미리보기 새로 만들기 (360p)", self.render_preview, "F5")
-
-        r = mb.addMenu("내보내기(&X)")
-        r.addAction(self.act_export)
-        r.addAction(self.act_export_voice)
-        r.addSeparator()
-        self._act(r, "캐시 비우기 (미리보기·내보내기 중간 파일)", self.clear_cache)
 
         h = mb.addMenu("도움말(&H)")
         self._act(h, "단축키", self.show_shortcuts, "F1")
         self._act(h, "정보", lambda: QMessageBox.about(self, APP_NAME, f"{APP_NAME} {__version__}\nAI JSON 으로 영상 자동 조립 + 더빙"))
 
-        tb = self.addToolBar("주요 기능")
+        # --- 맨 위 툴바: 🤖 AI · 📂 열기 · 💾 저장 · ➕ 미디어 추가 ▾ · ↶ ↷ · (오른쪽) 📤 영상 내보내기 ---
+        tb = self.top_toolbar = self.addToolBar("주요 기능")
         tb.setMovable(False)
         for text, slot in [("🤖 AI 로 구성하기", self.open_prompt_dialog), ("📂 열기", self.open_project),
-                           ("💾 저장", self.save), ("➕ 클립", self.add_clips),
-                           ("📤 내보내기", self.render_final), ("📄 대본", self.open_script_dialog)]:
+                           ("💾 저장", self.save)]:
             a = QAction(text, self)
-            a.triggered.connect(slot)
+            a.triggered.connect(lambda _=False, s=slot: s())
             tb.addAction(a)
+        self.btn_add_media = QToolButton()
+        self.btn_add_media.setText("➕ 미디어 추가")
+        self.btn_add_media.setToolTip("이미지·영상 추가 (Ctrl+I) — ▾ 에서 새 이미지 기본값")
+        self.btn_add_media.setPopupMode(QToolButton.MenuButtonPopup)
+        self.btn_add_media.clicked.connect(self.add_clips)
+        am = QMenu(self.btn_add_media)
+        am.addAction("➕ 이미지·영상 추가…", self.add_clips)
+        am.addAction("♪ 배경음악 넣기…", lambda: self.add_bgm())
+        am.addAction("📝 자막 파일 불러오기…", lambda: self.add_subtitle_file())
+        am.addSeparator()
+        am.addAction("새 이미지 기본값 (표시 시간 · 움직임 · 순서 묻기)…", self.show_image_defaults)
+        self.btn_add_media.setMenu(am)
+        tb.addWidget(self.btn_add_media)
+        tb.addSeparator()
+        tb.addAction(self.act_undo)
+        tb.addAction(self.act_redo)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        tb.addWidget(spacer)
+        self.btn_export_top = QToolButton()
+        self.btn_export_top.setDefaultAction(self.act_export)
+        self.btn_export_top.setText("📤 영상 내보내기")
+        self.btn_export_top.setStyleSheet("QToolButton{background:#2e7d32;color:white;font-weight:bold;padding:4px 14px;"
+                                          "border-radius:4px}")
+        tb.addWidget(self.btn_export_top)
 
     def show_shortcuts(self):
         QMessageBox.information(self, "단축키", "\n".join([
-            "Space : 재생 / 일시정지 (미리보기가 없거나 만드는 중이면 타임라인 시간으로 재생)", "R : 선택한 자막 줄 녹음 (녹음 중이면 정지)", "Shift+R : 연속 녹음 시작/정지",
+            "Space : 재생 / 일시정지 (녹음 중이면 정지)", "R : 선택한 자막 줄 녹음 (녹음 중이면 정지)", "Shift+R : 연속 녹음 시작/정지",
             "← / → : 이전 / 다음 자막 줄", "Ctrl+← / → : 0.1초 뒤로/앞으로 (Shift 를 더하면 1초)",
-            "[ / ] : 선택한 자막·테이크를 0.1초 앞당기기/늦추기 (Shift = 0.01초)",
-            "Delete : 선택한 클립 / 자막 줄 삭제", "Home : 처음으로", "F5 : 미리보기 새로 만들기 (보통은 자동)", "Ctrl+E : 영상 내보내기", "Ctrl+P : 대본 출력", "Ctrl+Z / Ctrl+Y : 실행 취소 / 다시 실행",
-            "Ctrl+S : 저장", "타임라인: 끌어서 이동, 끝을 끌어서 길이, Shift 끌기 = 0.01초, Ctrl+휠 = 확대",
+            "[ / ] : 선택한 자막·테이크·배경음악을 0.1초 앞당기기/늦추기 (Shift = 0.01초)",
+            "V : ↖ 선택 도구   C : ✂ 자르기 도구(누른 곳을 자름)   Esc : 선택 도구로 / In·Out 지우기",
+            "Ctrl+K : 재생 위치에서 자르기   I / O : 구간 In / Out   Delete : 고른 항목 삭제(클립은 뒤가 당겨짐)",
+            "Ctrl+= / Ctrl+- / Ctrl+0 : 타임라인 확대 / 축소 / 전체 보기",
+            "Home : 처음으로", "F5 : 미리보기 새로 만들기 (보통은 자동)", "Ctrl+E : 영상 내보내기", "Ctrl+P : 대본 출력",
+            "Ctrl+Z / Ctrl+Y : 실행 취소 / 다시 실행", "Ctrl+S : 저장",
+            "타임라인: 끌어서 이동, 끝을 끌어서 길이, 🧲 자석으로 경계에 붙음, Shift 끌기 = 자석 끄고 0.01초, Ctrl+휠 = 확대",
         ]))
 
     # ------------------------------------------------------------------ 단축키
@@ -274,6 +344,18 @@ class MainWindow(QMainWindow):
             return True
         if k == Qt.Key_Delete:
             return self.delete_selected()
+        if k == Qt.Key_V and not ctrl and not shift:
+            self.set_tool("select")
+            return True
+        if k == Qt.Key_C and not ctrl and not shift:
+            self.set_tool("razor")
+            return True
+        if k == Qt.Key_Escape:
+            if self.timeline.canvas.tool == "razor":
+                self.set_tool("select")
+            else:
+                self.clear_marks()
+            return True
         if k == Qt.Key_I and not ctrl:
             self.set_mark_in()
             return True
@@ -284,44 +366,227 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ 자르기 · 삭제 (프리미어처럼)
     def _build_timeline_box(self):
-        from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+        """타임라인 툴바: ↖ 선택 · ✂ 자르기 | 🗑 삭제 | [ In · Out ] · ✂ 구간 잘라내기 · ☑ 모든 트랙 | 🧲 자석 |
+        ＋ 전환 · ＋ 자막 · ● 녹음 | (오른쪽) 🔍− 확대 🔍+ · ⤢ 전체 보기 · 📍 따라가기"""
+        from PySide6.QtGui import QActionGroup
+        from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QPushButton, QSlider, QToolButton, QVBoxLayout, QWidget
         box = QWidget()
         lay = QVBoxLayout(box)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(2)
         bar = QHBoxLayout()
         bar.setContentsMargins(4, 2, 4, 0)
+        bar.setSpacing(3)
 
         def b(text, tip, slot):
             w = QPushButton(text)
             w.setToolTip(tip)
-            w.clicked.connect(slot)
+            w.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)  # 글자만큼만 (늘어나지 않게)
+            w.clicked.connect(lambda _=False: slot())
             bar.addWidget(w)
             return w
-        self.btn_cut = b("✂ 자르기 (Ctrl+K)", "빨간 재생 위치에서 고른 항목(없으면 그 아래 클립)을 둘로 나눕니다.\n"
-                         "클립·자막·더빙 모두 됩니다. 원본 파일은 그대로입니다.", lambda: self.cut_at())
-        self.btn_delete = b("🗑 삭제 (Delete)", "고른 조각을 지웁니다. 클립은 뒤 클립이 당겨져 붙습니다(리플 삭제).",
+
+        def tool(action):
+            w = QToolButton()
+            w.setDefaultAction(action)
+            w.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            bar.addWidget(w)
+            return w
+
+        def sep():
+            ln = QFrame(); ln.setFrameShape(QFrame.VLine); ln.setStyleSheet("color:#474b55;")
+            bar.addWidget(ln)
+
+        self.tool_group = QActionGroup(self)
+        self.act_select = QAction("↖ 선택 (V)", self, checkable=True, checked=True)
+        self.act_select.setToolTip("고르기·끌어서 옮기기·끝 끌어서 길이 (V)")
+        self.act_razor = QAction("✂ 자르기 (C)", self, checkable=True)
+        self.act_razor.setToolTip("누른 곳을 자릅니다 — 클립·자막·더빙 (C). 재생 위치에서 자르기는 Ctrl+K")
+        for a, t in ((self.act_select, "select"), (self.act_razor, "razor")):
+            self.tool_group.addAction(a)
+            a.triggered.connect(lambda _=False, t=t: self.set_tool(t))
+        self.btn_select = tool(self.act_select)
+        self.btn_razor = tool(self.act_razor)
+        sep()
+        self.btn_delete = b("🗑 삭제", "고른 조각을 지웁니다 (Delete). 클립은 뒤 클립이 당겨져 붙습니다(리플 삭제).",
                             self.delete_selected)
-        bar.addSpacing(12)
-        self.btn_in = b("[ In (I)", "구간 시작 표시 — 빨간 재생 위치", lambda: self.set_mark_in())
-        self.btn_out = b("Out (O) ]", "구간 끝 표시 — 빨간 재생 위치", lambda: self.set_mark_out())
-        self.btn_cut_range = b("✂ 구간 잘라내기", "In~Out 구간을 클립에서 빼고 뒤를 당겨 붙입니다", self.cut_marked_range)
-        self.chk_all_tracks = QCheckBox("모든 트랙 함께")
+        sep()
+        self.btn_in = b("[ In", "구간 시작 표시 — 빨간 재생 위치 (I)", lambda: self.set_mark_in())
+        self.btn_out = b("Out ]", "구간 끝 표시 — 빨간 재생 위치 (O)", lambda: self.set_mark_out())
+        self.btn_cut_range = b("✂ 구간 잘라내기", "In~Out 구간을 빼고 뒤를 당겨 붙입니다 (Esc = In/Out 지우기)",
+                               self.cut_marked_range)
+        self.chk_all_tracks = QCheckBox("모든 트랙")
         self.chk_all_tracks.setChecked(True)
         self.chk_all_tracks.setToolTip("켜면 자막·더빙도 같은 구간을 빼고 함께 당깁니다(잠긴 트랙은 그대로)")
         bar.addWidget(self.chk_all_tracks)
-        self.btn_clear_marks = b("In/Out 지우기", "", self.clear_marks)
+        sep()
+        self.btn_magnet = tool(self.act_magnet)
+        sep()
+        self.btn_add_tr = b("＋ 전환", "재생 위치에서 가장 가까운 클립 경계에 기본 전환 넣기", self.add_transition_here)
+        self.btn_add_sub = b("＋ 자막", "재생 위치에 자막 한 줄 넣기 (2초)", self.add_subtitle_here)
+        self.btn_rec = b("● 녹음 (R)", "녹음 탭으로 가서 녹음 시작 — 자막이 있으면 고른 줄, 없으면 자유 녹음",
+                         self.record_from_timeline)
+        self.btn_rec.setStyleSheet("QPushButton{color:#ff6b62;font-weight:bold}")
         bar.addStretch(1)
+        self.btn_zoom_out = b("🔍−", "타임라인 축소 (Ctrl+-, Ctrl+휠)", self.zoom_out)
+        self.zoom_slider = QSlider(Qt.Horizontal)
+        self.zoom_slider.setRange(0, 100)
+        self.zoom_slider.setFixedWidth(110)
+        self.zoom_slider.setToolTip("타임라인 확대/축소")
+        self.zoom_slider.valueChanged.connect(lambda v: self.timeline.canvas.set_zoom(self._pps_of(v)))
+        bar.addWidget(self.zoom_slider)
+        self.btn_zoom_in = b("🔍+", "타임라인 확대 (Ctrl+=, Ctrl+휠)", self.zoom_in)
+        self.btn_fit = b("⤢ 전체 보기", "프로젝트 전체가 한 화면에 들어오게 (Ctrl+0)", self.zoom_fit)
+        self.btn_follow = tool(self.act_follow)
+        self.timeline.canvas.zoom_changed.connect(self._sync_zoom_slider)
+        self._sync_zoom_slider(self.timeline.canvas.pps)
         lay.addLayout(bar)
         lay.addWidget(self.timeline, 1)
         self._update_cut_buttons()
         return box
 
+    # --- 확대 / 축소 (슬라이더는 로그 눈금: 5 ~ 800 px/초) ---
+    @staticmethod
+    def _pps_of(v: int) -> float:
+        return 5.0 * (160.0 ** (v / 100.0))
+
+    def _sync_zoom_slider(self, pps: float):
+        import math
+        self.zoom_slider.blockSignals(True)
+        self.zoom_slider.setValue(int(round(100 * math.log(max(5.0, pps) / 5.0) / math.log(160.0))))
+        self.zoom_slider.blockSignals(False)
+
+    def zoom_in(self):
+        self.timeline.canvas.set_zoom(self.timeline.canvas.pps * 1.3)
+
+    def zoom_out(self):
+        self.timeline.canvas.set_zoom(self.timeline.canvas.pps / 1.3)
+
+    def zoom_fit(self):
+        total = max(self.model.timeline.total, 1.0)
+        vw = max(200, self.timeline.viewport().width())
+        self.timeline.canvas.set_zoom((vw - 40) / total)
+        self.timeline.horizontalScrollBar().setValue(0)
+
+    def _set_magnet(self, on: bool):
+        self.timeline.canvas.magnet = bool(on)
+        QSettings("knhanul", "VideoComposer").setValue("timeline/magnet", bool(on))
+
+    def set_tool(self, t: str):
+        self.timeline.canvas.set_tool(t)
+        (self.act_razor if t == "razor" else self.act_select).setChecked(True)
+        if t == "razor":
+            self.statusBar().showMessage("✂ 자르기 도구 — 클립·자막·더빙에서 자를 곳을 누르세요 (V 또는 Esc = 선택 도구)", 6000)
+
+    def _razor(self, kind: str, idx: int, t: float):
+        self.model.select(kind, idx)
+        self.cut_at(t)
+
+    # --- ＋ 전환 / ＋ 자막 / ● 녹음 ---
+    def add_transition_here(self) -> bool:
+        from ..edit_ops import add_transition
+        if self._locked_msg("clip"):
+            return False
+        t = self.player.position()
+        tl = self.model.timeline
+        box = {}
+        self.model.edit(lambda p: box.setdefault("i", add_transition(p, tl, t)))
+        i = box.get("i")
+        if i is None:
+            self.statusBar().showMessage("클립이 2개 이상 있어야 전환을 넣을 수 있습니다", 5000)
+            return False
+        self.model.select("transition", i)
+        tr = self.model.timeline.clips[i].transition_in
+        self.statusBar().showMessage(f"＋ {i}번 ↔ {i + 1}번 클립 사이에 전환 {tr.duration:.2f}초 (Ctrl+Z 로 되돌리기)", 5000)
+        return True
+
+    def add_subtitle_here(self) -> bool:
+        from ..edit_ops import insert_cue
+        if self._locked_msg("subtitle"):
+            return False
+        t = self.player.position()
+        box = {}
+        self.model.edit(lambda p: box.setdefault("i", insert_cue(p, t)))
+        idx = box.get("i")
+        if idx is None:
+            self.statusBar().showMessage("여기에는 자막을 넣을 자리가 없습니다 (다른 자막과 겹침)", 5000)
+            return False
+        self.model.select("subtitle", idx)
+        self.right.setCurrentWidget(self.inspector)
+        te = self.inspector.sub_page.text
+        te.setFocus()
+        te.selectAll()
+        self.statusBar().showMessage("＋ 자막을 넣었습니다 — 오른쪽 '내용'에 글을 쓰세요 (Ctrl+Z 로 되돌리기)", 6000)
+        return True
+
+    def record_from_timeline(self):
+        """● 녹음: 녹음 탭으로 가서 — 자막이 있으면 고른(또는 재생 위치의) 줄 녹음, 없으면 자유 녹음."""
+        if self.dub.mode:
+            self.dub.stop_recording()
+            return
+        self.right.setCurrentWidget(self.dub_scroll)
+        if self.model.cues:
+            self.dub.mode_tabs.setCurrentIndex(0)
+            if self.model.selection.kind != "subtitle":
+                c = self.model.cue_timeline.current(self.player.position())
+                if c is not None:
+                    self.model.select("subtitle", c.index)
+            self.dub.record_line()
+        else:
+            self.dub.mode_tabs.setCurrentIndex(1)
+            self.dub.free_page.toggle_record()
+
+    def rerecord_take(self, i: int):
+        """더빙 속성의 ● 다시 녹음: 자막 줄 녹음이면 그 줄을 다시(새 버전), 자유 녹음이면 그 자리에서 새로 녹음."""
+        takes = self.model.project.dubbing.takes
+        if not (0 <= i < len(takes)) or self._locked_msg("take"):
+            return
+        tk = takes[i]
+        self.right.setCurrentWidget(self.dub_scroll)
+        if tk.subtitle is not None and self.model.cue_by_index(tk.subtitle) is not None:
+            self.dub.mode_tabs.setCurrentIndex(0)
+            self.model.select("subtitle", tk.subtitle)
+            self.dub.record_line()
+        else:
+            self.dub.mode_tabs.setCurrentIndex(1)
+            self.player.seek(self.model.take_positions()[i] + (tk.trim_start or 0.0))
+            self.dub.free_page.toggle_record()
+            self.statusBar().showMessage("새 녹음이 더해집니다 — 예전 녹음은 타임라인에서 고르고 Delete 로 지울 수 있어요", 8000)
+
+    # --- 넣기 (배경음악 · 자막 파일) ---
+    def ask_bgm_file(self) -> str:
+        f, _ = QFileDialog.getOpenFileName(self, "배경음악", str(self.model.project.base_dir),
+                                           "오디오 (*.mp3 *.wav *.m4a *.aac *.flac *.ogg *.opus)")
+        return f
+
+    def add_bgm(self, f: str = "") -> bool:
+        if self._locked_msg("bgm"):
+            return False
+        f = f or self.ask_bgm_file()
+        if not f:
+            return False
+        set_bgm_file(self.model, f)
+        self.model.select("bgm", 0)
+        self.statusBar().showMessage(f"♪ 배경음악: {Path(f).name} — 오른쪽 🛠 속성에서 볼륨·페이드 (Ctrl+Z 로 되돌리기)", 6000)
+        return True
+
+    def add_subtitle_file(self, f: str = "") -> bool:
+        if self._locked_msg("subtitle"):
+            return False
+        if not self.inspector.sub_file_panel.pick_sub(f):
+            return False
+        self.statusBar().showMessage(f"📝 자막 {len(self.model.cues)}줄을 불러왔습니다 (Ctrl+Z 로 되돌리기)", 6000)
+        return True
+
+    def show_image_defaults(self):
+        self.image_defaults.show()
+        self.image_defaults.raise_()
+
     def _update_cut_buttons(self):
         c = self.timeline.canvas
         ok = c.mark_in is not None and c.mark_out is not None and abs(c.mark_out - c.mark_in) >= 0.1
         self.btn_cut_range.setEnabled(ok)
-        self.btn_clear_marks.setEnabled(c.mark_in is not None or c.mark_out is not None)
+        self.act_clear_marks.setEnabled(c.mark_in is not None or c.mark_out is not None)
 
     def _file_len(self, rel: str) -> float:
         from ..probe import probe
@@ -450,7 +715,10 @@ class MainWindow(QMainWindow):
         m.addAction("[ 여기를 In 으로", lambda: self.set_mark_in(t))
         m.addAction("여기를 Out 으로 ]", lambda: self.set_mark_out(t))
         m.addAction("✂ 구간 잘라내기", self.cut_marked_range).setEnabled(self.btn_cut_range.isEnabled())
-        m.addAction("In/Out 지우기", self.clear_marks).setEnabled(self.btn_clear_marks.isEnabled())
+        m.addAction("In/Out 지우기 (Esc)", self.clear_marks).setEnabled(self.act_clear_marks.isEnabled())
+        m.addSeparator()
+        m.addAction("＋ 여기에 전환", lambda: (self.player.seek(t), self.add_transition_here()))
+        m.addAction("＋ 여기에 자막", lambda: (self.player.seek(t), self.add_subtitle_here()))
         self._last_menu = m
         m.popup(gpos)
 
@@ -496,15 +764,11 @@ class MainWindow(QMainWindow):
             self.model.edit(lambda p: setattr(p.bgm, "start_offset", max(0.0, round(p.bgm.start_offset + d, 3))), "nudge")
 
     # ------------------------------------------------------------------ 상태
-    def show_settings_tab(self, focus: Optional[str] = None):
-        self.right.setCurrentWidget(self.settings_scroll)
-        page = self.inspector.project_page
-        target = {"bgm": getattr(page, "g_bgm", None)}.get(focus or "")
-        if target is not None:
-            self.settings_scroll.ensureWidgetVisible(target, 0, 0)
+    def show_output_tab(self):
+        self.right.setCurrentWidget(self.output_scroll)
 
     def show_style_tab(self):
-        self.right.setCurrentWidget(self.style_panel)
+        self.right.setCurrentWidget(self.sub_scroll)
         self.style_panel.sample.replay()
 
     def _cue_at(self, t: float):
@@ -694,10 +958,10 @@ class MainWindow(QMainWindow):
 
     def _on_selection(self):
         s = self.model.selection
-        if s.kind in ("clip", "take"):  # 자막 줄 선택은 더빙 탭을 유지(녹음 흐름)
+        # 고르면 🛠 속성 탭으로. 단 녹음 탭에서 자막·더빙을 고를 때는 녹음 흐름을 지키려고 그대로
+        recording_tab = self.right.currentWidget() is self.dub_scroll
+        if s.kind in ("clip", "transition", "bgm") or (s.kind in ("subtitle", "take") and not recording_tab):
             self.right.setCurrentWidget(self.inspector)
-        elif s.kind == "bgm":
-            self.show_settings_tab(focus="bgm")
         if s.kind == "clip" and 0 <= s.index < len(self.model.timeline.clips) and not self.player.is_playing():
             self.player.seek(self.model.timeline.clips[s.index].start)
 
@@ -975,7 +1239,7 @@ class MainWindow(QMainWindow):
         dlg = OrderDialog(files, dropped, self)
         ok = dlg.exec() == OrderDialog.Accepted
         if ok and dlg.skip_next.isChecked():
-            self.clip_panel.skip_order.setChecked(True)
+            self.image_defaults.skip_order.setChecked(True)
         order = dlg.result_order if ok else None
         dlg.deleteLater()
         return order
@@ -1017,15 +1281,15 @@ class MainWindow(QMainWindow):
             if base is not None:
                 p.base_dir = base
         changed = False
-        if len(plan.media) >= 2 and not self.clip_panel.skip_order.isChecked():
+        if len(plan.media) >= 2 and not self.image_defaults.skip_order.isChecked():
             order = self.ask_media_order(plan.media, plan.media_given)
             if order is None:
                 self.statusBar().showMessage("넣기를 취소했습니다", 4000)
                 return
             plan.media = order
         if plan.media:
-            inserted = insert_media(p, plan.media, index, self.clip_panel.image_duration.value(),
-                                    self.clip_panel.image_motion.currentData())
+            inserted = insert_media(p, plan.media, index, self.image_defaults.image_duration.value(),
+                                    self.image_defaults.image_motion.currentData())
             where = "끝에" if index is None or index >= len(p.clips) - len(inserted) else f"{inserted[0] + 1}번 자리에"
             notes.insert(0, f"클립 {len(inserted)}개를 {where} 추가했습니다.")
             changed = True

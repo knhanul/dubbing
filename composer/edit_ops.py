@@ -235,3 +235,55 @@ def clip_index_at(timeline: Timeline, t: float) -> Optional[int]:
 
 __all__ = ["split_clip", "delete_clip", "split_cue", "split_take", "take_span", "cut_range", "clip_index_at",
            "MIN_CLIP"]
+
+
+# ------------------------------------------------------------------ 타임라인 툴바: ＋ 자막 · ＋ 전환
+NEW_CUE_LEN = 2.0
+
+
+def insert_cue(project: Project, t: float, text: str = "새 자막", length: float = NEW_CUE_LEN) -> Optional[int]:
+    """재생 위치 t 에 자막 한 줄을 넣고 새 번호를 돌려줌. 다른 자막과 겹치지 않게(자리가 0.3초도 없으면 None)."""
+    from .subtitles import ensure_items
+    items = list(ensure_items(project))
+    lt = max(0.0, t - project.subtitle.offset)
+    for x in sorted(items, key=lambda x: x.start):
+        if x.start - 1e-6 <= lt < x.end:  # 자막 위면 그 자막 끝에서 시작
+            lt = x.end
+    nxt = min((x.start for x in items if x.start > lt + 1e-6), default=float("inf"))
+    end = min(lt + length, nxt)
+    if end - lt < 0.3:
+        return None
+    new = SubtitleItem(0, round(lt, 3), round(end, 3), text)
+    _renumber(project, items + [new])
+    return new.index
+
+
+def nearest_boundary(timeline: Timeline, t: float) -> Optional[int]:
+    """t 에 가장 가까운 클립 경계(뒤 클립 번호, 1 이상)."""
+    n = len(timeline.clips)
+    if n < 2:
+        return None
+    return min(range(1, n), key=lambda j: abs(timeline.clips[j].start - t))
+
+
+def add_transition(project: Project, timeline: Timeline, t: float) -> Optional[int]:
+    """t 에 가장 가까운 경계에 기본 전환을 넣음(기본이 '없음'이면 크로스페이드, 길이 0이면 0.5초). 길이는 자동 제한."""
+    from .timeline import transition_limit
+    i = nearest_boundary(timeline, t)
+    if i is None:
+        return None
+    g = project.transition
+    base = Transition(g.type if g.type != "none" else "crossfade", g.duration if g.duration > 0 else 0.5)
+    lim = transition_limit(timeline.clips[i - 1].duration, timeline.clips[i].duration)
+    project.clips[i].transition = Transition(base.type, round(min(base.duration, lim), 3))
+    return i
+
+
+def apply_default_transition_all(project: Project) -> int:
+    """모든 경계가 기본 전환을 쓰게(클립별 지정·없애기를 지움). 바뀐 경계 수."""
+    n = 0
+    for c in project.clips[1:]:
+        if c.transition is not None:
+            c.transition = None
+            n += 1
+    return n

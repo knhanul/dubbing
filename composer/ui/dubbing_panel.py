@@ -35,6 +35,7 @@ def fix_label(lab: QLabel, lines: int) -> None:
 
 class DubbingPanel(QWidget):
     status = Signal(str)
+    script_requested = Signal()
 
     def __init__(self, model: ProjectModel, player: PreviewPlayer, parent=None):
         super().__init__(parent)
@@ -92,17 +93,14 @@ class DubbingPanel(QWidget):
         self.btn_rec.setStyleSheet("QPushButton{background:#b3261e;color:white;font-weight:bold;padding:6px}")
         self.btn_session = QPushButton("● 연속 녹음 (Shift+R)")
         self.btn_stop = QPushButton("■ 정지")
-        self.btn_play = QPushButton("▶ 테이크 듣기")
-        self.btn_play_v = QPushButton("▶ 영상과 함께")
         rb = QHBoxLayout()
         for b in (self.btn_rec, self.btn_session, self.btn_stop):
             rb.addWidget(b)
         self.strip = MicStrip()  # 입력 소리: ● REC · 레벨 미터 · 흘러가는 파형 · 무음 경고
-        pb = QHBoxLayout(); pb.addWidget(self.btn_play); pb.addWidget(self.btn_play_v)
 
-        # --- 설정 ---
-        g = QGroupBox("녹음 설정")
-        f = QFormLayout(g)
+        # --- 마이크 줄 (두 방식 공통, 맨 위) ---
+        g = QGroupBox("🎤 마이크")
+        gm = QVBoxLayout(g)
         self.dev = QComboBox()
         self.dev.setToolTip("녹음할 마이크. ★ = Windows 기본 장치")
         self.dev.setMinimumHeight(26)
@@ -117,7 +115,11 @@ class DubbingPanel(QWidget):
         self.rec_vol.setToolTip("녹음하는 동안 원본 소리 크기 (0 = 음소거)")
         self.auto_next = QCheckBox("녹음 후 다음 줄로 자동 이동"); self.auto_next.setChecked(True)
         self.live = QCheckBox("재생할 때 녹음한 목소리 함께 듣기"); self.live.setChecked(True)
-        f.addRow("🎤 입력 장치(마이크)", dr)
+        gm.addLayout(dr)
+        gm.addWidget(self.strip)
+        from .widgets import Collapsible
+        self.opts = Collapsible("녹음 옵션 — 프리롤 · 끝난 뒤 여유 · 원본 소리 · 자동 이동", key="rec_opts")
+        f = self.opts.form
         f.addRow("미리 재생(프리롤)", self.preroll)
         f.addRow("끝난 뒤 여유", self.postroll)
         f.addRow("녹음 중 원본 소리", self.rec_vol)
@@ -137,43 +139,63 @@ class DubbingPanel(QWidget):
             hh.setSectionResizeMode(i, QHeaderView.ResizeToContents)
 
         # 두 가지 녹음 방법: 자막 따라 녹음 / 자유 녹음(대본 먼저 → 녹음으로 자막 만들기)
-        from PySide6.QtWidgets import QTabWidget
         from .free_record import FreeRecordPage
         follow = QWidget()
         fl = QVBoxLayout(follow)
         fl.setContentsMargins(0, 0, 0, 0)
         fl.addWidget(disp)
         fl.addLayout(rb)
-        fl.addWidget(self.strip)
-        fl.addLayout(pb)
+        tip = QLabel("자막 줄을 두 번 누르면 그 녹음을 듣습니다(없으면 그 줄로 이동)")
+        tip.setStyleSheet("color:#9aa0a6;")
+        fl.addWidget(tip)
         fl.addWidget(self.table, 1)
         self.free_page = FreeRecordPage(self)
         self.free_page.status.connect(self.status.emit)
-        self.mode_tabs = QTabWidget()
-        self.mode_tabs.addTab(follow, "🎤 자막 따라 녹음")
-        self.mode_tabs.addTab(self.free_page, "🎙 자유 녹음 (대본 먼저)")
-        self.mode_tabs.setTabToolTip(0, "이미 있는 자막 시간에 맞춰 한 줄씩 녹음")
-        self.mode_tabs.setTabToolTip(1, "대본을 보며 편하게 녹음한 뒤, 녹음에 맞춰 자막(SRT)을 자동으로 만들기")
+        # 방식 고르기: [ 자막 따라 녹음 | 자유 녹음 ] (눌러서 바꾸는 단추 두 개)
+        from PySide6.QtWidgets import QButtonGroup, QStackedWidget
+        self.mode_tabs = QStackedWidget()
+        self.mode_tabs.addWidget(follow)
+        self.mode_tabs.addWidget(self.free_page)
+        seg = QHBoxLayout(); seg.setSpacing(0)
+        self.btn_mode_follow = QPushButton("🎤 자막 따라 녹음")
+        self.btn_mode_follow.setToolTip("이미 있는 자막 시간에 맞춰 한 줄씩 녹음")
+        self.btn_mode_free = QPushButton("🎙 자유 녹음 (대본 먼저)")
+        self.btn_mode_free.setToolTip("대본을 보며 편하게 녹음한 뒤, 녹음에 맞춰 자막(SRT)을 자동으로 만들기")
+        self.mode_group = QButtonGroup(self)
+        for k, b in enumerate((self.btn_mode_follow, self.btn_mode_free)):
+            b.setCheckable(True)
+            b.setMinimumHeight(30)
+            b.setStyleSheet("QPushButton:checked{background:#3b4250;color:#fff;font-weight:bold;border:1px solid #8ab4f8}")
+            self.mode_group.addButton(b, k)
+            seg.addWidget(b)
+        self.btn_mode_follow.setChecked(True)
+        self.mode_group.idClicked.connect(self.mode_tabs.setCurrentIndex)
+        self.mode_tabs.currentChanged.connect(lambda i: self.mode_group.button(i).setChecked(True))
+        seg.addSpacing(8)
+        self.btn_script = QPushButton("📄 대본 출력…")
+        self.btn_script.setToolTip("자막·대본을 인쇄용으로 (Ctrl+P)")
+        self.btn_script.clicked.connect(self.script_requested.emit)
+        seg.addWidget(self.btn_script)
 
         lay = QVBoxLayout(self)
-        lay.addWidget(self.mode_tabs, 1)
         lay.addWidget(g)
+        lay.addLayout(seg)
+        lay.addWidget(self.mode_tabs, 1)
+        lay.addWidget(self.opts)
 
         self.btn_rec.clicked.connect(self.record_line)
         self.btn_session.clicked.connect(self.toggle_session)
         self.btn_stop.clicked.connect(self.stop_recording)
-        self.btn_play.clicked.connect(lambda: self.play_selected(False))
-        self.btn_play_v.clicked.connect(lambda: self.play_selected(True))
         self.btn_dev.clicked.connect(self.refresh_devices)
         self.btn_test.toggled.connect(self.set_monitoring)
         self.dev.currentIndexChanged.connect(self._device_changed)
         self.table.itemSelectionChanged.connect(self._table_selected)
-        self.table.cellDoubleClicked.connect(lambda r, c: self._seek_row(r))
+        self.table.cellDoubleClicked.connect(lambda r, c: self._row_activated(r))
         player.position_changed.connect(self.on_position)
         model.changed.connect(self.refresh_table)
         model.selection_changed.connect(self._sync_selection)
         self.meter_timer = QTimer(self)
-        self.strips = [self.strip, self.free_page.strip]
+        self.strips = [self.strip]
         self._warned = False
         self.meter_timer.setInterval(33)  # 약 30fps
         self.meter_timer.timeout.connect(self._meter)
@@ -303,6 +325,17 @@ class DubbingPanel(QWidget):
                 self.table.scrollToItem(self.table.item(r, 0))
                 self.table.blockSignals(False)
                 break
+
+    def _row_activated(self, row):
+        """자막 줄 두 번 누르기 = 그 줄 녹음 듣기 (녹음이 없으면 그 줄로 이동)."""
+        c = self._row_cue(row)
+        if not c:
+            return
+        k = next((i for i, t in enumerate(self.model.project.dubbing.takes) if t.subtitle == c.index), None)
+        if k is None or self.mode:
+            self._seek_row(row)
+        else:
+            self.play_take(k, False)
 
     def _seek_row(self, row):
         c = self._row_cue(row)

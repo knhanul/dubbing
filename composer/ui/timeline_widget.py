@@ -45,6 +45,9 @@ class TimelineCanvas(QWidget):
     seek_requested = Signal(float)
     context_requested = Signal(object, float)  # (화면 좌표, 타임라인 초) — 오른쪽 클릭 메뉴
     files_dropped = Signal(list, int)  # 탐색기에서 끌어온 경로들, 클립 삽입 위치
+    zoom_changed = Signal(float)  # 초당 픽셀 (툴바 확대 슬라이더와 맞춤)
+    razor_requested = Signal(str, int, float)  # ✂ 자르기 도구로 누른 (종류, 번호, 타임라인 초)
+    add_requested = Signal(str)  # 빈 트랙의 '＋ 음악 넣기'(bgm) / '＋ 자막 파일'(subtitle)
 
     def __init__(self, model: ProjectModel, parent=None):
         super().__init__(parent)
@@ -59,6 +62,9 @@ class TimelineCanvas(QWidget):
         self.mark_out: Optional[float] = None
         self.empty_hint = ""  # 클립이 없을 때 가운데 안내
         self.drop_hint: Optional[dict] = None  # 드롭 위치 표시 {"index": n, "x": px, "text": str}
+        self.tool = "select"  # "select" ↖ 선택 / "razor" ✂ 누른 곳을 자름
+        self.magnet = True  # 🧲 클립 끝·재생 위치·자막 경계·In/Out 에 붙기 (Shift = 끔)
+        self._razor_x: Optional[float] = None
         self.setAcceptDrops(True)
         model.changed.connect(self._relayout)
         model.selection_changed.connect(self.update)
@@ -89,8 +95,69 @@ class TimelineCanvas(QWidget):
         self.update()
 
     def set_zoom(self, pps: float):
-        self.pps = max(5.0, min(800.0, pps))
+        pps = max(5.0, min(800.0, pps))
+        changed = abs(pps - self.pps) > 1e-9
+        self.pps = pps
         self._relayout()
+        if changed:
+            self.zoom_changed.emit(pps)
+
+    def set_tool(self, tool: str):
+        self.tool = tool if tool in ("select", "razor") else "select"
+        self._razor_x = None
+        self.setCursor(Qt.ArrowCursor)
+        self.update()
+
+    # --- 🧲 자석 ---
+    MAGNET_PX = 8
+
+    def magnet_targets(self, skip_kind: str = "", skip_index: int = -1) -> list[float]:
+        """붙을 수 있는 시각: 클립 경계 · 재생 위치 · 자막 시작/끝 · 더빙 시작/끝 · In/Out (끌고 있는 항목 제외)."""
+        m = self.model
+        ts = [0.0, self.playhead]
+        for c in m.timeline.clips:
+            if skip_kind == "clip" and c.index >= skip_index:  # 끄는 클립과 그 뒤(같이 움직임)는 제외
+                break
+            ts += [c.start, c.end]
+        for it in m.cues:
+            if not (skip_kind == "subtitle" and it.index == skip_index):
+                ts += [it.start, it.end]
+        for k, (_, _, r) in enumerate(x for x in self._items() if x[0] == "take"):
+            if not (skip_kind == "take" and k == skip_index):
+                ts += [self.t_of(r.left()), self.t_of(r.right())]
+        ts += [t for t in (self.mark_in, self.mark_out) if t is not None]
+        return ts
+
+    def snap_time(self, t: float, fine: bool, skip_kind: str = "", skip_index: int = -1) -> tuple[float, bool]:
+        """자석이 켜져 있고 Shift 가 아니면 가까운(8px) 시각에 붙이고, 아니면 0.1초(Shift 0.01초) 단위."""
+        if self.magnet and not fine:
+            tol = self.MAGNET_PX / self.pps
+            best = min(self.magnet_targets(skip_kind, skip_index), key=lambda x: abs(x - t), default=None)
+            if best is not None and abs(best - t) <= tol:
+                return round(best, 3), True
+        return snap(t, fine), False
+
+    def snap_span(self, start: float, end: float, fine: bool, kind: str, index: int) -> tuple[float, bool]:
+        """옮기는 항목: 시작이나 끝 중 더 가까운 쪽을 붙임 → 옮길 양(초)."""
+        a, sa = self.snap_time(start, fine, kind, index)
+        b, sb = self.snap_time(end, fine, kind, index)
+        if sa and (not sb or abs(a - start) <= abs(b - end)):
+            return a - start, True
+        if sb:
+            return b - end, True
+        return snap(start, fine) - start, False
+
+    # --- 빈 트랙 ＋ 단추 ---
+    def add_buttons(self) -> list[tuple[str, QRectF, str]]:
+        out = []
+        pr = self.model.project
+        if not pr.bgm.file:
+            r = self.track_rect("bgm")
+            out.append(("bgm", QRectF(self.x_of(0) + 4, r.top() + 4, 150, r.height() - 8), "＋ 음악 넣기"))
+        if not self.model.cues:
+            r = self.track_rect("subtitle")
+            out.append(("subtitle", QRectF(self.x_of(0) + 4, r.top() + 5, 170, r.height() - 10), "＋ 자막 파일 불러오기"))
+        return out
 
     def set_playhead(self, t: float):
         old = self.x_of(self.playhead)
@@ -343,6 +410,20 @@ class TimelineCanvas(QWidget):
                 p.setPen(QColor("#ffffff"))
                 p.drawText(QRectF(x if lab == "In" else x - w, 0, w, 13), Qt.AlignCenter, lab)
 
+        # 빈 트랙의 ＋ 단추
+        f5 = QFont(self.font()); f5.setPointSizeF(8.5)
+        p.setFont(f5)
+        for _, r, text in self.add_buttons():
+            p.setPen(QPen(QColor("#8ab4f8"), 1, Qt.DashLine))
+            p.setBrush(QColor(138, 180, 248, 30))
+            p.drawRoundedRect(r, 4, 4)
+            p.setPen(QColor("#c6dafc"))
+            p.drawText(r, Qt.AlignCenter, text)
+        # ✂ 자르기 도구: 마우스 위치에 자를 선
+        if self.tool == "razor" and self._razor_x is not None:
+            p.setPen(QPen(QColor("#ffd54f"), 1, Qt.DashLine))
+            p.drawLine(QPointF(self._razor_x, RULER_H), QPointF(self._razor_x, self.height()))
+
         # 재생 위치
         x = self.x_of(self.playhead)
         p.setPen(QPen(QColor("#ff4d4d"), 2))
@@ -380,7 +461,17 @@ class TimelineCanvas(QWidget):
             self.seek_requested.emit(self.t_of(pos.x()))
             self._drag = {"kind": "seek"}
             return
+        for kind, r, _ in self.add_buttons():
+            if r.contains(pos):
+                self.add_requested.emit(kind)
+                return
         hit = self.hit_test(pos)
+        if self.tool == "razor":  # ✂ 누른 곳을 자름 (클립·자막·더빙)
+            if hit is not None and hit.kind in ("clip", "subtitle", "take"):
+                self.razor_requested.emit(hit.kind, hit.index, self.t_of(pos.x()))
+            else:
+                self.seek_requested.emit(self.t_of(pos.x()))
+            return
         if hit is None:
             self.seek_requested.emit(self.t_of(pos.x()))
             self.model.select("")
@@ -411,7 +502,8 @@ class TimelineCanvas(QWidget):
             it = next(i for i in items if i.index == hit.index)
             return {"start": it.start, "end": it.end}
         if hit.kind == "take":
-            return {"offset": pr.dubbing.takes[hit.index].offset}
+            r = next(r for k, i, r in self._items() if k == "take" and i == hit.index)
+            return {"offset": pr.dubbing.takes[hit.index].offset, "span": (self.t_of(r.left()), self.t_of(r.right()))}
         if hit.kind == "bgm":
             return {"start": pr.bgm.start_offset}
         return {}
@@ -419,6 +511,14 @@ class TimelineCanvas(QWidget):
     def mouseMoveEvent(self, ev):
         pos = ev.position()
         d = self._drag
+        if d is None and self.tool == "razor":
+            self._razor_x = pos.x() if pos.y() >= RULER_H else None
+            self.setCursor(Qt.SplitHCursor if pos.y() >= RULER_H else Qt.ArrowCursor)
+            self.update()
+            return
+        if d is None and any(r.contains(pos) for _, r, _ in self.add_buttons()):
+            self.setCursor(Qt.PointingHandCursor)
+            return
         if d is None:
             hit = self.hit_test(pos)
             edge = hit if hit and hit.part in ("left", "right") and not locked(self.model.project, hit.kind) else None
@@ -443,7 +543,9 @@ class TimelineCanvas(QWidget):
         tip = ""
         if k == "clip" and d["part"] == "right":
             c = pr.clips[d["index"]]
-            new_out = max(0.1, snap(o["out"] + dt, fine))
+            st = self.model.timeline.clips[d["index"]].start
+            end, stuck = self.snap_time(st + o["out"] + dt, fine, "clip", d["index"])
+            new_out = max(0.1, round(end - st, 3) if stuck else snap(o["out"] + dt, fine))
             if c.type == "image":
                 if c.fit_duration:
                     c.fit_duration = new_out
@@ -491,19 +593,28 @@ class TimelineCanvas(QWidget):
             items = ensure_items(pr)
             it = next(i for i in items if i.index == d["index"])
             if d["part"] == "left":
-                it.start = min(snap(max(0.0, o["start"] + dt), fine), it.end - 0.1)
+                off = pr.subtitle.offset  # 자막 값은 오프셋 전, 붙을 곳은 화면(타임라인) 시각
+                it.start = min(round(self.snap_time(max(0.0, o["start"] + dt) + off, fine, "subtitle", it.index)[0] - off, 3),
+                               it.end - 0.1)
             elif d["part"] == "right":
-                it.end = max(snap(o["end"] + dt, fine), it.start + 0.1)
+                off = pr.subtitle.offset
+                it.end = max(round(self.snap_time(o["end"] + dt + off, fine, "subtitle", it.index)[0] - off, 3),
+                             it.start + 0.1)
             else:
-                delta = snap(max(dt, -o["start"]), fine)
+                off = pr.subtitle.offset
+                dd = max(dt, -o["start"])
+                delta, stuck = self.snap_span(o["start"] + dd + off, o["end"] + dd + off, fine, "subtitle", it.index)
+                delta = max(dd + delta, -o["start"]) if stuck else snap(dd, fine)
                 it.start, it.end = round(o["start"] + delta, 3), round(o["end"] + delta, 3)
             tip = f"{it.start:.2f} → {it.end:.2f} ({it.end - it.start:.2f}초)"
         elif k == "take":
             t = pr.dubbing.takes[d["index"]]
-            t.offset = snap(o["offset"] + dt, fine)
+            a0, b0 = o["span"]
+            delta, stuck = self.snap_span(a0 + dt, b0 + dt, fine, "take", d["index"])
+            t.offset = round(o["offset"] + dt + delta, 3) if stuck else snap(o["offset"] + dt, fine)
             tip = f"오프셋 {t.offset:+.2f}초"
         elif k == "bgm":
-            pr.bgm.start_offset = max(0.0, snap(o["start"] + dt, fine))
+            pr.bgm.start_offset = max(0.0, self.snap_time(o["start"] + dt, fine, "bgm")[0])
             tip = f"시작 {pr.bgm.start_offset:.2f}초"
         if k not in ("clip", "transition") or d["part"] in ("left", "right"):
             self.model.recompute()
@@ -538,6 +649,9 @@ class TimelineCanvas(QWidget):
         self.update()
 
     def leaveEvent(self, ev):
+        if self._razor_x is not None:
+            self._razor_x = None
+            self.update()
         if self._hover is not None:
             self._hover = None
             self.update()

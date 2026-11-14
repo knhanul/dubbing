@@ -134,7 +134,7 @@ def win(files):
     w = mw.MainWindow()
     w.notify = lambda *a, **k: None
     w.confirm = lambda *a, **k: True
-    assert not w.clip_panel.skip_order.isChecked()
+    assert not w.image_defaults.skip_order.isChecked()
     yield w
     w.shutdown(); w.deleteLater(); QCoreApplication.processEvents()
 
@@ -175,7 +175,7 @@ def test_real_dialog_from_main_window_and_skip_next(win, files, monkeypatch):
     w.handle_drop([files / "img1.png", files / "img2.png", files / "img10.png"])
     assert [c.file for c in w.model.project.clips] == ["img2.png", "img1.png", "img10.png"]
     # '다음부터 묻지 않고 이름순' → 설정 저장, 다음엔 창 없이 이름순
-    assert w.clip_panel.skip_order.isChecked()
+    assert w.image_defaults.skip_order.isChecked()
     assert str(QSettings("knhanul", "VideoComposer").value("import/skip_order_dialog")).lower() == "true"
     monkeypatch.setattr(OrderDialog, "exec", lambda dlg: pytest.fail("묻지 않아야 함"))
     w.handle_drop([files / "img10.png", files / "img2.png"])

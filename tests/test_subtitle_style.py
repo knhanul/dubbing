@@ -180,16 +180,22 @@ def test_style_tab_always_present_and_menu(win):
     from PySide6.QtWidgets import QFontComboBox
     w = win
     tabs = [w.right.tabText(i) for i in range(w.right.count())]
-    assert "🅰 자막 스타일" in tabs
-    assert isinstance(w.style_panel.font_combo, QFontComboBox)
-    view_menu = next(a.menu() for a in w.menuBar().actions() if a.text().startswith("보기"))
-    act = next(a for a in view_menu.actions() if a.text() == "🅰 자막 스타일")
+    assert "🅰 자막" in tabs
+    sp = w.style_panel
+    assert isinstance(sp.font_combo, QFontComboBox)
+    assert w.sub_scroll.widget().isAncestorOf(sp) and w.sub_scroll.widget().isAncestorOf(w.inspector.sub_file_panel)
+    # 자주 쓰는 것(빠른 조정)만 펼쳐 두고, 글꼴·색 등은 '자세히' 안에 (처음엔 접힘)
+    assert sp.more.body.isHidden() and sp.more.body.isAncestorOf(sp.font_combo)
+    sp.more.head.click()
+    assert not sp.more.body.isHidden()
+    # 프리셋 이름 바꾸기·삭제 등은 ⋯ 메뉴
+    assert sp.btn_more_preset.menu() is sp.preset_menu and len(sp.preset_actions) >= 2
+    w.show_style_tab()
+    assert w.right.currentWidget() is w.sub_scroll
     w.right.setCurrentIndex(0)
-    act.trigger()
-    assert w.right.currentWidget() is w.style_panel
-    w.right.setCurrentIndex(0)
-    w.inspector.project_page.btn_style.click()  # 프로젝트 설정의 버튼도 이 탭으로
-    assert w.right.currentWidget() is w.style_panel
+    w.model.select("subtitle", 1)
+    w.inspector.sub_page.btn_style.click()  # 자막 속성의 버튼도 이 탭으로
+    assert w.right.currentWidget() is w.sub_scroll
 
 
 def test_style_edits_write_json_update_overlay_and_skip_rerender(win):

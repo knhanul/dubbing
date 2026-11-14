@@ -170,12 +170,14 @@ def test_menu_shortcut_and_toolbar(app, proj):
         f = w.menuBar().actions()[0].menu()
         act = next(a for a in f.actions() if a.text() == "📄 대본 출력…")
         assert act.shortcut().toString() == "Ctrl+P"
-        tb = [a.text() for a in w.findChildren(type(act)) if a.text() == "📄 대본"]
-        assert tb
+        assert w.dub.btn_script.text() == "📄 대본 출력…"  # 툴바 대신 파일 메뉴 + 🎤 녹음 탭
+        assert not [a for a in w.top_toolbar.actions() if a.text() == "📄 대본"]
         w.set_project(proj, None)
         seen = []
         w.exec_script_dialog = lambda dlg: seen.append(dlg.preview.toPlainText())
         act.trigger()
         assert seen and "안녕하세요" in seen[0]
+        w.dub.btn_script.click()
+        assert len(seen) == 2
     finally:
         w.shutdown(); w.deleteLater(); QCoreApplication.processEvents()

@@ -61,8 +61,9 @@ def _key(w, k, mod=Qt.NoModifier):
 
 def test_buttons_menu_and_cut_clip(win):
     w, app = win
-    assert w.btn_cut.text() == "✂ 자르기 (Ctrl+K)" and w.btn_delete.text() == "🗑 삭제 (Delete)"
-    assert w.btn_cut_range.text() == "✂ 구간 잘라내기" and w.chk_all_tracks.text() == "모든 트랙 함께"
+    assert w.btn_razor.text() == "✂ 자르기 (C)" and w.btn_delete.text() == "🗑 삭제"
+    assert w.btn_cut_range.text() == "✂ 구간 잘라내기" and w.chk_all_tracks.text() == "모든 트랙"
+    assert not hasattr(w, "btn_cut")  # 재생 위치에서 자르기는 Ctrl+K·편집 메뉴·오른쪽 클릭
     assert not w.btn_cut_range.isEnabled()
     edit = next(a.menu() for a in w.menuBar().actions() if a.text().startswith("편집"))
     cut_act = next(a for a in edit.actions() if a.text().startswith("✂ 재생 위치에서 자르기"))
@@ -119,7 +120,7 @@ def test_in_out_range_cut_all_tracks_and_undo(win):
     assert pr.dubbing.takes[0].offset == pytest.approx(4.5)
     assert c.mark_in is None and not w.btn_cut_range.isEnabled()
     assert w.model.undo() and w.model.project.to_json() == before  # 되돌리기 한 번
-    # '모든 트랙 함께' 끄면 클립만
+    # '모든 트랙' 끄면 클립만
     w.set_mark_in(3.0)
     w.set_mark_out(5.0)
     w.chk_all_tracks.setChecked(False)

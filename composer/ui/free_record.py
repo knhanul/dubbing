@@ -132,10 +132,7 @@ class FreeRecordPage(QWidget):
         self.lbl_pos.setFixedHeight(self.lbl_pos.sizeHint().height())
         r2 = QHBoxLayout(); r2.addWidget(self.btn_rec, 1); r2.addWidget(self.btn_import)
         gr.addWidget(self.with_video)
-        gr.addLayout(r2)
-        from .level_widgets import MicStrip
-        self.strip = MicStrip()  # 입력 소리 (패널이 30fps 로 채움)
-        gr.addWidget(self.strip)
+        gr.addLayout(r2)  # 입력 소리(● REC · 미터 · 파형)는 녹음 탭 맨 위 마이크 줄에 (두 방식 공통)
         gr.addWidget(self.lbl_pos)
 
         # --- 자막 만들기 ---
@@ -145,10 +142,11 @@ class FreeRecordPage(QWidget):
         self.btn_make.setStyleSheet("QPushButton{background:#1a73e8;color:white;font-weight:bold;padding:8px}")
         self.btn_align = QPushButton("✏ 자막 맞추기…")
         self.btn_align.setToolTip("더빙 파형 위에서 자막 시간을 끌어서 맞추고, 나누기·합치기·탭으로 맞추기를 합니다")
-        self.btn_save_srt = QPushButton("SRT 파일로 저장…")
-        r3 = QHBoxLayout(); r3.addWidget(self.btn_make, 1); r3.addWidget(self.btn_align); r3.addWidget(self.btn_save_srt)
+        r3 = QHBoxLayout(); r3.addWidget(self.btn_make, 1); r3.addWidget(self.btn_align)
         gm.addLayout(r3)
-        fo = QFormLayout()
+        from .widgets import Collapsible
+        self.opts = Collapsible("자막 만들기 옵션 — 인식 방법 · 모델 · 글자 수 · 최소 표시", key="autosub_opts")
+        fo = self.opts.form
         self.engine = QComboBox()
         for k, v in ENGINES:
             self.engine.addItem(v, k)
@@ -165,7 +163,7 @@ class FreeRecordPage(QWidget):
         fo.addRow("음성 인식 모델", self.whisper_model)
         fo.addRow("자막 한 개", rl)
         fo.addRow("최소 표시", self.min_dur)
-        gm.addLayout(fo)
+        gm.addWidget(self.opts)
         self.lbl_engine = QLabel()
         self.lbl_engine.setWordWrap(True)
         self.lbl_engine.setStyleSheet("color:#9aa0a6;")
@@ -189,7 +187,6 @@ class FreeRecordPage(QWidget):
         self.btn_rec.clicked.connect(self.toggle_record)
         self.btn_import.clicked.connect(self.import_audio)
         self.btn_make.clicked.connect(self.make_subtitles)
-        self.btn_save_srt.clicked.connect(self.save_srt)
         self.btn_align.clicked.connect(self.align_existing)
         self.engine.currentIndexChanged.connect(lambda _: self._update_engine_note())
         self.whisper_model.currentIndexChanged.connect(lambda _: self._update_engine_note())
@@ -328,7 +325,6 @@ class FreeRecordPage(QWidget):
         n = len(self.free_takes())
         self.btn_make.setEnabled(n > 0 and not rec)
         self.btn_make.setToolTip("" if n else "먼저 자유 녹음을 하거나 음성 파일을 불러오세요")
-        self.btn_save_srt.setEnabled(bool(self.model.cues))
         self.btn_align.setEnabled(bool(self.model.cues) and not rec)
         if not rec:
             self._on_position(self.player.position())
@@ -479,7 +475,7 @@ class FreeRecordPage(QWidget):
         msg = f"✔ 자막 {len(cues)}줄을 넣었습니다 ({how}{', 대본 문장 사용' if self.script_text() else ''})."
         if res.note:
             msg += " " + res.note
-        msg += " '✏ 자막 맞추기…'로 다시 고칠 수 있고, Ctrl+Z 로 되돌릴 수 있습니다."
+        msg += " '✏ 자막 맞추기…'로 다시 고칠 수 있고, Ctrl+Z 로 되돌릴 수 있습니다. SRT 파일 저장은 🅰 자막 탭에서."
         self.lbl_result.setText(msg)
         self.status.emit(msg)
         self._warn_if_longer(max(res.speech_end, self._take_ends()), append=True)

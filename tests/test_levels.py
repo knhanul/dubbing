@@ -94,7 +94,7 @@ def win(fake_sd, tmp_path):  # noqa: F811
 def test_mic_test_meter_and_rec_indicator(win):
     w, app, d = win
     dub = w.dub
-    st, fst = dub.strip, dub.free_page.strip
+    st, fst = dub.strip, dub.strip  # 마이크 막대는 녹음 탭 위 하나
     dub.recorder.close()
     dub._meter()
     assert not dub.btn_test.isChecked() and not st.meter.active and "대기" in st.rec.text()
@@ -151,7 +151,7 @@ def test_free_record_strip_and_timeline_take_wave(win):
     assert dub.mode == "free"
     dub.recorder._callback(np.zeros((48000 * 4, 1), np.float32), 48000 * 4, None, None)
     dub._meter()
-    assert not dub.free_page.strip.warn.isHidden() and "REC" in dub.free_page.strip.rec.text()
+    assert not dub.strip.warn.isHidden() and "REC" in dub.strip.rec.text()
     dub.recorder._callback(_sine(0.5, 1.0), 48000, None, None)
     dub.free_page.toggle_record()
     tk = w.model.project.dubbing.takes[-1]

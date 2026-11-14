@@ -71,7 +71,7 @@ def test_video_geometry_unchanged_when_subtitles_change(win):
         assert _geo(w) == ref
     w.player.pause()
     # 다른 탭(자막 스타일)에서도
-    w.right.setCurrentWidget(w.style_panel)
+    w.right.setCurrentWidget(w.sub_scroll)
     ref2 = _geo(w)
     assert ref2[0][0] == ref[0][0] and ref2[1] == ref[1]
     for t in (1, 3, 7, 11):

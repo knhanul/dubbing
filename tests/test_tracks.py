@@ -207,6 +207,7 @@ def test_preview_live_audio_and_overlay(win):
 
 def test_lock_blocks_edits(win, media):
     from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+    from PySide6.QtTest import QTest as QTestM
     from PySide6.QtGui import QKeyEvent, QMouseEvent
     w, app = win
     hd = w.timeline.header
@@ -234,16 +235,24 @@ def test_lock_blocks_edits(win, media):
     assert w.handle_key(QKeyEvent(QEvent.KeyPress, Qt.Key_Delete, Qt.NoModifier))
     w.nudge_selected(0.1)
     assert w.model.project.to_json() == before and "잠겨 있습니다" in w.statusBar().currentMessage()
-    # 출력 설정의 배경음악·자막 묶음 잠김, 제거 기능도 막힘
-    pg = w.inspector.project_page
-    assert not pg.g_bgm.isEnabled() and "🔒" in pg.g_bgm.title() and not pg.g_sub.isEnabled()
+    # 🅰 자막 탭의 자막 파일 묶음·배경음악 칸 잠김, 제거 기능도 막힘
+    sfp = w.inspector.sub_file_panel
+    assert "🔒" in sfp.title() and not sfp.btn_sub.isEnabled() and not sfp.btn_sub_clear.isEnabled()
+    if w.model.project.bgm.file:
+        w.model.select("bgm")
+        assert not w.inspector.bgm_page.isEnabled() and w.inspector.lock_banner.isVisibleTo(w.inspector)
     assert w.remove_bgm() is False and w.remove_all_subtitles() is False and w.asked == []
     # 탐색기에서 끌어 놓기도 넣지 않음
     w.handle_drop([media / "img1.png", media / "subs.srt"], None)
     app.processEvents()
     assert len(w.model.project.clips) == 2 and any("잠겨 있어" in n for n in w.notes)
-    # 클립 목록 순서 바꾸기도 무시
-    w.clip_panel.apply_order([1, 0])
+    # ＋ 전환 / ＋ 자막 / 자르기 도구 / 배경음악 넣기도 막힘
+    assert w.add_transition_here() is False and w.add_subtitle_here() is False
+    assert w.add_bgm(str(media / "img1.png")) is False
+    w.set_tool("razor")
+    r0 = next(r for k, i, r in cv._items() if k == "clip")
+    QTestM.mouseClick(cv, Qt.LeftButton, Qt.NoModifier, QPoint(int(r0.center().x()), int(r0.center().y())))
+    w.set_tool("select")
     assert w.model.project.to_json() == before
     # 풀면 다시 편집 가능
     hd.buttons[("clips", "locked")].click()
