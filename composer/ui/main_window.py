@@ -81,6 +81,14 @@ class MainWindow(QMainWindow):
         self.right.addTab(self.clip_panel, "🎞 클립 목록")
         self.style_panel = SubtitleStylePanel(self.model)
         self.right.addTab(self.style_panel, "🅰 자막 스타일")
+        # 프로젝트 전체 설정(영상 크기·fps·화면 맞춤·전환·자막 파일·배경음악·더빙) — 항상 보이는 탭
+        self.settings_scroll = QScrollArea()
+        self.settings_scroll.setWidgetResizable(True)
+        self.settings_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.settings_scroll.setWidget(self.inspector.project_page)
+        self.right.addTab(self.settings_scroll, "⚙ 출력 설정")
+        self.inspector.settings_requested.connect(self.show_settings_tab)
+        self.inspector.style_requested.connect(self.show_style_tab)
         self.right.currentChanged.connect(lambda i: self.dub.ensure_devices() if i == 0 else None)
         top = QSplitter(Qt.Horizontal)
         top.addWidget(self.player)
@@ -183,6 +191,7 @@ class MainWindow(QMainWindow):
         a = self._act(v, "재생 위치 따라가기", lambda c: setattr(self.timeline, "follow", c))
         a.setCheckable(True); a.setChecked(True)
         self._act(v, "🅰 자막 스타일", self.show_style_tab, "Ctrl+Shift+T")
+        self._act(v, "⚙ 출력 설정 (영상 크기·fps·전환·음악·더빙)", self.show_settings_tab, "Ctrl+,")
         self.act_auto = QAction("자동 미리보기 (편집하면 알아서 다시 만들기)", self)
         self.act_auto.setCheckable(True)
         self.act_auto.setChecked(self.auto.enabled)
@@ -270,6 +279,13 @@ class MainWindow(QMainWindow):
             self.model.edit(lambda p: setattr(p.bgm, "start_offset", max(0.0, round(p.bgm.start_offset + d, 3))), "nudge")
 
     # ------------------------------------------------------------------ 상태
+    def show_settings_tab(self, focus: Optional[str] = None):
+        self.right.setCurrentWidget(self.settings_scroll)
+        page = self.inspector.project_page
+        target = {"bgm": getattr(page, "g_bgm", None)}.get(focus or "")
+        if target is not None:
+            self.settings_scroll.ensureWidgetVisible(target, 0, 0)
+
     def show_style_tab(self):
         self.right.setCurrentWidget(self.style_panel)
         self.style_panel.sample.replay()
@@ -439,8 +455,10 @@ class MainWindow(QMainWindow):
 
     def _on_selection(self):
         s = self.model.selection
-        if s.kind in ("clip", "take", "bgm"):
+        if s.kind in ("clip", "take"):  # 자막 줄 선택은 더빙 탭을 유지(녹음 흐름)
             self.right.setCurrentWidget(self.inspector)
+        elif s.kind == "bgm":
+            self.show_settings_tab(focus="bgm")
         if s.kind == "clip" and 0 <= s.index < len(self.model.timeline.clips) and not self.player.is_playing():
             self.player.seek(self.model.timeline.clips[s.index].start)
 
@@ -891,9 +909,15 @@ class MainWindow(QMainWindow):
         if not self._check_renderable():
             return
         default = self.model.project.resolve(self.model.project.output.file or "output.mp4")
-        opt = FinalRenderOptions(default, self)
-        if not opt.exec():
+        o = self.model.project.output
+        opt = FinalRenderOptions(default, self, o.width, o.height, o.fps)
+        if not self.exec_export_options(opt):
             return
+        w, h, fps = opt.output_size()
+        if (w, h, fps) != (o.width, o.height, float(o.fps)):  # 내보내기 창에서 바꾼 크기·fps → 프로젝트에 반영(실행 취소 1회)
+            def fn(p):
+                p.output.width, p.output.height, p.output.fps = w, h, fps
+            self.model.edit(fn)
         out = Path(opt.path.text())
         worker = RenderWorker(self.model.project, out, opt.settings())
         dlg = ProgressDialog(worker, "영상 내보내기", self)
@@ -903,6 +927,10 @@ class MainWindow(QMainWindow):
                                                    f"{res.clips_rendered}개 · 캐시 사용 {res.clips_cached}개\n\n폴더를 열까요?")
             if r == QMessageBox.Yes:
                 open_folder(out.parent)
+
+    def exec_export_options(self, opt) -> bool:
+        """내보내기 설정 창 (테스트에서 바꿔 끼울 수 있음)."""
+        return bool(opt.exec())
 
     def export_voice(self):
         if not self.model.project.dubbing.takes:

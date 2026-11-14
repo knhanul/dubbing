@@ -272,7 +272,7 @@ class SubtitleStylePanel(QWidget):
         self.sample.set_style(st, p.output.width, p.output.height)
         if not p.subtitle.burn_in:
             self.note.setText("⚠ 지금은 '소프트 자막'(켜고 끄는 자막)으로 내보내도록 되어 있어, 최종 영상에서는 이 스타일·효과가 "
-                              "적용되지 않습니다(재생 프로그램이 정함). 프로젝트 설정 ▸ 자막 ▸ '영상에 자막 입히기'를 켜세요.")
+                              "적용되지 않습니다(재생 프로그램이 정함). ⚙ 출력 설정 ▸ 자막 ▸ '영상에 자막 입히기'를 켜세요.")
         else:
             self.note.setText("바꾸면 미리보기 화면의 자막에 바로 반영됩니다(다시 렌더하지 않음). 영상을 내보낼 때 같은 모양으로 "
                               "영상에 새겨집니다. 미리보기의 효과는 비슷하게 흉내 낸 것이라 실제와 약간 다를 수 있습니다.")

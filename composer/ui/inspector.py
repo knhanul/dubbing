@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDoubleSpinBo
 from ..schema import (EASINGS, FITS, MOTION_LABELS, MOTIONS, TRANSITION_LABELS, TRANSITIONS, Clip, Transition,
                       guess_type)
 from ..subtitles import detach_takes, ensure_items, has_subtitles, to_srt
+from .size_presets import combo_size, fill_size_combo, sync_size_combo
 from .model import ProjectModel
 from .widgets import NudgeSpin
 
@@ -413,21 +414,19 @@ class ProjectPage(QWidget):
         self.model = model
         self._loading = False
         lay = QVBoxLayout(self)
-        g_out = QGroupBox("출력")
+        g_out = QGroupBox("영상 (크기 · fps · 화면 맞춤)")
         fo = QFormLayout(g_out)
         self.w = QSpinBox(); self.w.setRange(16, 7680); self.w.setSingleStep(2)
         self.h = QSpinBox(); self.h.setRange(16, 4320); self.h.setSingleStep(2)
         self.preset = QComboBox()
-        for label, (pw, ph) in [("직접 입력", (0, 0)), ("1920×1080 가로", (1920, 1080)), ("1080×1920 세로(쇼츠)", (1080, 1920)),
-                                ("1280×720", (1280, 720)), ("1080×1080 정사각", (1080, 1080)), ("3840×2160 4K", (3840, 2160))]:
-            self.preset.addItem(label, (pw, ph))
+        fill_size_combo(self.preset)
         self.fps = QDoubleSpinBox(); self.fps.setRange(1, 120); self.fps.setDecimals(3)
         self.fit = QComboBox()
         self.fit.addItem("꽉 채우기(잘라냄)", "cover"); self.fit.addItem("전체 보이기(여백)", "contain")
         self.bg = QPushButton()
         self.orig_vol = QDoubleSpinBox(); self.orig_vol.setRange(0, 4); self.orig_vol.setSingleStep(0.05)
         self.out_file = QLineEdit()
-        fo.addRow("크기 프리셋", self.preset)
+        fo.addRow("영상 크기", self.preset)
         row = QHBoxLayout(); row.addWidget(self.w); row.addWidget(QLabel("×")); row.addWidget(self.h)
         fo.addRow("가로 × 세로", row)
         fo.addRow("fps", self.fps)
@@ -466,7 +465,7 @@ class ProjectPage(QWidget):
         fs.addRow("스타일", self.btn_style)
         lay.addWidget(g_sub)
 
-        g_bgm = QGroupBox("배경음악")
+        g_bgm = self.g_bgm = QGroupBox("배경음악")
         fb = QFormLayout(g_bgm)
         self.bgm_file = QLabel("-")
         self.btn_bgm = QPushButton("음악 선택…")
@@ -550,7 +549,7 @@ class ProjectPage(QWidget):
     def _preset(self, i):
         if self._loading:
             return
-        pw, ph = self.preset.itemData(i)
+        pw, ph = combo_size(self.preset, i)
         if pw:
             self._set(None, lambda p: (setattr(p.output, "width", pw), setattr(p.output, "height", ph)))
 
@@ -594,7 +593,7 @@ class ProjectPage(QWidget):
         p = self.model.project
         o = p.output
         self.w.setValue(o.width); self.h.setValue(o.height); self.fps.setValue(o.fps)
-        self.preset.setCurrentIndex(max(0, self.preset.findData((o.width, o.height))))
+        sync_size_combo(self.preset, o.width, o.height)
         self.fit.setCurrentIndex(max(0, self.fit.findData(o.fit)))
         self._swatch(self.bg, o.background)
         self.orig_vol.setValue(o.original_volume)
@@ -617,37 +616,62 @@ class ProjectPage(QWidget):
         self._loading = False
 
 
-class Inspector(QTabWidget):
-    """'선택 항목' 탭 + '프로젝트 설정' 탭."""
+class Inspector(QWidget):
+    """'🛠 미세 조정' 탭: 타임라인에서 고른 항목(클립·자막·더빙 테이크)만 편집합니다.
+    프로젝트 전체 설정(ProjectPage)은 오른쪽 '⚙ 출력 설정' 탭에 따로 있습니다."""
+
+    settings_requested = Signal()  # '⚙ 출력 설정' 탭 열기
+    style_requested = Signal()  # '🅰 자막 스타일' 탭 열기
 
     def __init__(self, model: ProjectModel, parent=None):
         super().__init__(parent)
         self.model = model
         self.stack = QStackedWidget()
-        self.empty = QLabel("타임라인에서 클립·자막·더빙을 클릭하면\n여기서 0.1초 단위로 미세 조정할 수 있습니다.\n\n"
-                            "끌어서 옮길 때 Shift = 0.01초 단위")
-        self.empty.setAlignment(Qt.AlignCenter)
+        self.empty = QWidget()
+        el = QVBoxLayout(self.empty)
+        el.addStretch(1)
+        msg = QLabel("타임라인에서 <b>클립·자막·더빙</b>을 클릭하면<br>여기서 0.1초 단위로 미세 조정할 수 있습니다."
+                     "<br><br><small>끌어서 옮길 때 Shift = 0.01초 단위</small>")
+        msg.setAlignment(Qt.AlignCenter)
+        msg.setWordWrap(True)
+        el.addWidget(msg)
+        el.addSpacing(16)
+        more = QLabel("영상 크기·fps·전환·배경음악·더빙 설정은 <b>⚙ 출력 설정</b> 탭,<br>"
+                      "자막 글꼴·색·위치·효과는 <b>🅰 자막 스타일</b> 탭에 있습니다.")
+        more.setAlignment(Qt.AlignCenter)
+        more.setWordWrap(True)
+        more.setStyleSheet("color:#9aa0a6;")
+        el.addWidget(more)
+        self.btn_settings = QPushButton("⚙ 출력 설정 열기")
+        self.btn_style = QPushButton("🅰 자막 스타일 열기")
+        row = QHBoxLayout(); row.addStretch(1); row.addWidget(self.btn_settings); row.addWidget(self.btn_style); row.addStretch(1)
+        el.addLayout(row)
+        el.addStretch(2)
+        self.btn_settings.clicked.connect(self.settings_requested.emit)
+        self.btn_style.clicked.connect(self.style_requested.emit)
         self.clip_page = ClipPage(model)
         self.sub_page = SubtitlePage(model)
         self.take_page = TakePage(model)
         for w in (self.empty, self.clip_page, self.sub_page, self.take_page):
             self.stack.addWidget(w)
-        self.addTab(_scroll(self.stack), "선택 항목")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(_scroll(self.stack))
+        # 프로젝트 설정 페이지는 여기서 만들지만 메인 창의 '⚙ 출력 설정' 탭에 들어갑니다.
         self.project_page = ProjectPage(model)
-        self.addTab(_scroll(self.project_page), "프로젝트 설정")
         model.selection_changed.connect(self._on_selection)
         model.changed.connect(self._refresh_current)
 
     def _on_selection(self):
         k = self.model.selection.kind
         page = {"clip": self.clip_page, "subtitle": self.sub_page, "take": self.take_page}.get(k)
-        if k == "bgm":
-            self.setCurrentIndex(1)
+        if k == "bgm":  # 배경음악은 프로젝트 설정
+            self.stack.setCurrentWidget(self.empty)
+            self.settings_requested.emit()
             return
         self.stack.setCurrentWidget(page or self.empty)
         if page:
             page.refresh()
-            self.setCurrentIndex(0)
 
     def _refresh_current(self):
         w = self.stack.currentWidget()

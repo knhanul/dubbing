@@ -102,9 +102,23 @@ class ProgressDialog(QDialog):
 
 
 class FinalRenderOptions(QDialog):
-    def __init__(self, default_path: Path, parent=None):
+    def __init__(self, default_path: Path, parent=None, width: int = 1920, height: int = 1080, fps: float = 30.0):
         super().__init__(parent)
         self.setWindowTitle("영상 내보내기")
+        from PySide6.QtWidgets import QDoubleSpinBox, QLabel, QSpinBox
+
+        from .size_presets import fill_size_combo, sync_size_combo
+        self._sync = sync_size_combo
+        self.size_combo = QComboBox()
+        fill_size_combo(self.size_combo)
+        self.w = QSpinBox(); self.w.setRange(16, 7680); self.w.setSingleStep(2); self.w.setValue(int(width))
+        self.h = QSpinBox(); self.h.setRange(16, 4320); self.h.setSingleStep(2); self.h.setValue(int(height))
+        self.fps = QDoubleSpinBox(); self.fps.setRange(1, 120); self.fps.setDecimals(3); self.fps.setValue(float(fps))
+        sync_size_combo(self.size_combo, width, height)
+        self.size_combo.currentIndexChanged.connect(self._preset)
+        self.w.valueChanged.connect(self._sizes_edited)
+        self.h.valueChanged.connect(self._sizes_edited)
+        self.size_note = QLabel("<small>여기서 바꾸면 프로젝트(⚙ 출력 설정)에도 반영됩니다.</small>")
         self.path = QLineEdit(str(default_path))
         b = QPushButton("…")
         b.clicked.connect(self._browse)
@@ -119,6 +133,11 @@ class FinalRenderOptions(QDialog):
         f = QFormLayout(self)
         r = QHBoxLayout(); r.addWidget(self.path, 1); r.addWidget(b)
         f.addRow("저장 위치", r)
+        f.addRow("영상 크기", self.size_combo)
+        rs = QHBoxLayout(); rs.addWidget(self.w); rs.addWidget(QLabel("×")); rs.addWidget(self.h)
+        rs.addSpacing(12); rs.addWidget(QLabel("fps")); rs.addWidget(self.fps)
+        f.addRow("가로 × 세로", rs)
+        f.addRow("", self.size_note)
         f.addRow("인코더", self.encoder)
         f.addRow("움직임 품질", self.quality)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -127,6 +146,20 @@ class FinalRenderOptions(QDialog):
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         f.addRow(bb)
+
+    def _preset(self, i):
+        from .size_presets import combo_size
+        pw, ph = combo_size(self.size_combo, i)
+        if pw:
+            for sb, v in ((self.w, pw), (self.h, ph)):
+                old = sb.blockSignals(True); sb.setValue(v); sb.blockSignals(old)
+
+    def _sizes_edited(self, *_):
+        self._sync(self.size_combo, self.w.value(), self.h.value())
+
+    def output_size(self) -> tuple[int, int, float]:
+        w, h = self.w.value(), self.h.value()
+        return w - w % 2, h - h % 2, float(self.fps.value())
 
     def _browse(self):
         p, _ = QFileDialog.getSaveFileName(self, "저장 위치", self.path.text(), "MP4 (*.mp4)")
