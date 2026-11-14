@@ -40,6 +40,7 @@ class Hit:
 
 class TimelineCanvas(QWidget):
     seek_requested = Signal(float)
+    files_dropped = Signal(list, int)  # 탐색기에서 끌어온 경로들, 클립 삽입 위치
 
     def __init__(self, model: ProjectModel, parent=None):
         super().__init__(parent)
@@ -49,6 +50,8 @@ class TimelineCanvas(QWidget):
         self.setMouseTracking(True)
         self.setMinimumHeight(RULER_H + sum(t[2] for t in TRACKS) + 8)
         self._drag: Optional[dict] = None
+        self.drop_hint: Optional[dict] = None  # 드롭 위치 표시 {"index": n, "x": px, "text": str}
+        self.setAcceptDrops(True)
         model.changed.connect(self._relayout)
         model.selection_changed.connect(self.update)
         self._relayout()
@@ -200,6 +203,28 @@ class TimelineCanvas(QWidget):
             p.drawText(rect.adjusted(5, 2, -3, -2), Qt.AlignLeft | Qt.AlignVCenter, text)
             p.restore()
 
+        # 드롭 위치 표시
+        if self.drop_hint:
+            h = self.drop_hint
+            p.fillRect(self.rect(), QColor(80, 160, 255, 28))
+            if h.get("x") is not None:
+                cr = self.track_rect("clip")
+                p.setPen(QPen(QColor("#4dd2ff"), 3))
+                p.drawLine(QPointF(h["x"], cr.top()), QPointF(h["x"], cr.bottom()))
+                p.setBrush(QColor("#4dd2ff"))
+                p.drawEllipse(QPointF(h["x"], cr.top() + 2), 4, 4)
+            f2 = QFont(self.font())
+            f2.setBold(True)
+            p.setFont(f2)
+            tx = (h["x"] + 8) if h.get("x") is not None else LABEL_W + 8
+            tw = p.fontMetrics().horizontalAdvance(h["text"]) + 12
+            box = QRectF(tx - 6, 2, tw, RULER_H - 4)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(10, 40, 60, 230))
+            p.drawRoundedRect(box, 4, 4)
+            p.setPen(QColor("#4dd2ff"))
+            p.drawText(box, Qt.AlignCenter, h["text"])
+
         # 재생 위치
         x = self.x_of(self.playhead)
         p.setPen(QPen(QColor("#ff4d4d"), 2))
@@ -318,6 +343,76 @@ class TimelineCanvas(QWidget):
                 pr.clips.insert(target, clip)
                 self.model.select("clip", target)
         self.model.commit()
+
+    # --- 탐색기 드래그 앤 드롭 ---
+    def drop_index_at(self, x: float) -> int:
+        """x 위치에 놓으면 몇 번째 자리에 삽입되는지 (클립 가운데 기준)."""
+        t = self.t_of(x)
+        return sum(1 for c in self.model.timeline.clips if (c.start + c.duration / 2) < t)
+
+    def insert_x(self, index: int) -> float:
+        clips = self.model.timeline.clips
+        if not clips:
+            return self.x_of(0)
+        if index >= len(clips):
+            return self.x_of(clips[-1].end)
+        return self.x_of(clips[index].start)
+
+    def _update_drop_hint(self, ev) -> bool:
+        from ..importer import classify_paths
+        from .dnd import paths_from_mime
+
+        paths = paths_from_mime(ev.mimeData())
+        if not paths:
+            self.drop_hint = None
+            self.update()
+            return False
+        plan = classify_paths(paths)
+        idx = self.drop_index_at(ev.position().x())
+        parts = []
+        if plan.media:
+            parts.append(f"클립 {len(plan.media)}개를 {idx + 1}번 자리에 삽입")
+        if plan.subtitles:
+            parts.append("자막 설정")
+        if plan.audio:
+            parts.append("배경음악 설정")
+        if plan.projects and not parts:
+            parts.append("프로젝트 열기")
+        if not parts:
+            parts.append("추가할 수 있는 파일이 없습니다")
+        self.drop_hint = {"index": idx, "x": self.insert_x(idx) if plan.media else None, "text": " · ".join(parts)}
+        self.update()
+        return True
+
+    def dragEnterEvent(self, ev):
+        if self._update_drop_hint(ev):
+            ev.setDropAction(Qt.CopyAction)
+            ev.accept()
+        else:
+            ev.ignore()
+
+    def dragMoveEvent(self, ev):
+        if self._update_drop_hint(ev):
+            ev.setDropAction(Qt.CopyAction)
+            ev.accept()
+        else:
+            ev.ignore()
+
+    def dragLeaveEvent(self, ev):
+        self.drop_hint = None
+        self.update()
+
+    def dropEvent(self, ev):
+        from .dnd import paths_from_mime
+
+        paths = paths_from_mime(ev.mimeData())
+        idx = self.drop_index_at(ev.position().x())
+        self.drop_hint = None
+        self.update()
+        if paths:
+            ev.setDropAction(Qt.CopyAction)
+            ev.accept()
+            self.files_dropped.emit(paths, idx)
 
     def wheelEvent(self, ev):
         if ev.modifiers() & Qt.ControlModifier:

@@ -17,6 +17,7 @@ from ..render.ffmpeg_builder import RenderSettings
 from ..render.runner import cache_dir, clear_cache
 from ..schema import Clip, Project, SubtitleSettings, Transition, guess_type
 from ..validate import has_errors, validate_project
+from .dnd import ClipListPanel, paths_from_mime
 from .dubbing_panel import DubbingPanel
 from .inspector import Inspector, _rel
 from .model import ProjectModel
@@ -58,9 +59,11 @@ class MainWindow(QMainWindow):
         self.inspector = Inspector(self.model)
         self.timeline = TimelineView(self.model)
 
+        self.clip_panel = ClipListPanel(self.model)
         self.right = QTabWidget()
         self.right.addTab(self.dub, "🎤 더빙 / 자막")
         self.right.addTab(self.inspector, "🛠 미세 조정")
+        self.right.addTab(self.clip_panel, "🎞 클립 목록")
         self.right.currentChanged.connect(lambda i: self.dub.ensure_devices() if i == 0 else None)
         top = QSplitter(Qt.Horizontal)
         top.addWidget(self.player)
@@ -74,6 +77,13 @@ class MainWindow(QMainWindow):
 
         self.player.position_changed.connect(self.timeline.set_playhead)
         self.timeline.canvas.seek_requested.connect(self.player.seek)
+        self.timeline.canvas.files_dropped.connect(self.handle_drop)
+        self.clip_panel.files_dropped.connect(self.handle_drop)
+        # 탐색기에서 창 어디에 놓아도 받기 (미리보기 화면은 부모 창으로 넘김)
+        self.setAcceptDrops(True)
+        self.player.view.setAcceptDrops(False)
+        self.player.view.viewport().setAcceptDrops(False)
+        self.last_drop_report = ""
         self.inspector.take_page.play_requested.connect(self.dub.play_take)
         self.dub.status.connect(lambda m: self.statusBar().showMessage(m, 6000))
         self.model.changed.connect(self._on_changed)
@@ -86,7 +96,8 @@ class MainWindow(QMainWindow):
         self.key_filter = KeyFilter(self)
         QApplication.instance().installEventFilter(self.key_filter)
         self._title()
-        self.statusBar().showMessage("파일 ▸ 'AI 프롬프트로 새 프로젝트' 또는 '동영상+자막으로 더빙 시작'으로 시작하세요.")
+        self.statusBar().showMessage("파일 ▸ 'AI 프롬프트로 새 프로젝트' 또는 '동영상+자막으로 더빙 시작'으로 시작하거나, "
+                                     "탐색기에서 이미지·영상·폴더를 끌어다 놓으세요.")
         QTimer.singleShot(0, self._on_changed)
 
     # ------------------------------------------------------------------ 메뉴
@@ -398,18 +409,101 @@ class MainWindow(QMainWindow):
 
     def add_clips(self):
         files, _ = QFileDialog.getOpenFileNames(self, "클립 추가", str(self.model.project.base_dir), MEDIA_FILTER)
-        if not files:
+        if files:
+            self.handle_drop([Path(f) for f in files], None)
+
+    # ------------------------------------------------------------------ 드래그 앤 드롭
+    def dragEnterEvent(self, ev):
+        if paths_from_mime(ev.mimeData()):
+            ev.setDropAction(Qt.CopyAction)
+            ev.accept()
+        else:
+            ev.ignore()
+
+    def dragMoveEvent(self, ev):
+        self.dragEnterEvent(ev)
+
+    def dropEvent(self, ev):
+        paths = paths_from_mime(ev.mimeData())
+        if paths:
+            ev.setDropAction(Qt.CopyAction)
+            ev.accept()
+            self.handle_drop(paths, None)
+
+    def confirm(self, title: str, text: str) -> bool:
+        """예/아니요 질문 (테스트에서 바꿔 끼울 수 있음)."""
+        return QMessageBox.question(self, title, text) == QMessageBox.Yes
+
+    def notify(self, text: str, warning: bool = False) -> None:
+        self.last_drop_report = text
+        self.statusBar().showMessage(text.split("\n")[0], 8000)
+        if warning:
+            QMessageBox.information(self, "가져오기", text)
+
+    def handle_drop(self, paths: list, index: Optional[int] = None) -> None:
+        """탐색기에서 끌어온 파일/폴더 처리. index 는 클립 삽입 위치(None = 끝에 추가)."""
+        from ..importer import classify_paths, describe_unsupported, guess_base_dir, insert_media, rel_path
+
+        plan = classify_paths(paths)
+        notes: list[str] = []
+        # 프로젝트(.json)만 놓았으면 그 프로젝트를 엽니다.
+        if plan.projects and not (plan.media or plan.subtitles or plan.audio):
+            if len(plan.projects) > 1:
+                notes.append(f"프로젝트는 하나만 열 수 있어 {plan.projects[0].name} 만 엽니다.")
+            if self.maybe_save():
+                self.load_path(plan.projects[0])
+                notes.insert(0, f"프로젝트를 열었습니다: {plan.projects[0].name}")
+            if plan.unsupported:
+                notes.append(describe_unsupported(plan.unsupported))
+            self.notify("\n".join(notes), warning=bool(plan.unsupported) or len(plan.projects) > 1)
             return
+        if plan.projects:
+            notes.append(f"프로젝트 파일({', '.join(p.name for p in plan.projects)})은 다른 파일과 함께 놓으면 열지 않습니다. 따로 끌어 놓으세요.")
+
         p = self.model.project
-        if not p.clips and not self.model.path:
-            p.base_dir = Path(files[0]).parent
-        for f in files:
-            kind = guess_type(f)
-            if kind == "image":
-                p.clips.append(Clip(file=_rel(p, f), type="image", duration=4.0, motion="zoom_in"))
-            elif kind == "video":
-                p.clips.append(Clip(file=_rel(p, f), type="video"))
-        self.model.commit()
+        if not p.clips and self.model.path is None:
+            base = guess_base_dir(plan)
+            if base is not None:
+                p.base_dir = base
+        changed = False
+        if plan.media:
+            inserted = insert_media(p, plan.media, index, self.clip_panel.image_duration.value(),
+                                    self.clip_panel.image_motion.currentData())
+            where = "끝에" if index is None or index >= len(p.clips) - len(inserted) else f"{inserted[0] + 1}번 자리에"
+            notes.insert(0, f"클립 {len(inserted)}개를 {where} 추가했습니다.")
+            changed = True
+        if plan.subtitles:
+            sub = plan.subtitles[0]
+            p.subtitle.file = rel_path(p, sub)
+            p.subtitle.items = None
+            notes.append(f"자막을 {sub.name} 로 설정했습니다.")
+            if len(plan.subtitles) > 1:
+                notes.append(f"자막은 하나만 쓸 수 있어 나머지 {len(plan.subtitles) - 1}개는 무시했습니다.")
+            changed = True
+        if plan.audio:
+            music = plan.audio[0]
+            rel = rel_path(p, music)
+            if p.bgm.file and p.bgm.file != rel:
+                ok = self.confirm("배경음악", f"이미 배경음악({p.bgm.file})이 있습니다.\n{music.name} 로 바꿀까요?")
+            else:
+                ok = True
+            if ok:
+                p.bgm.file = rel
+                notes.append(f"배경음악을 {music.name} 로 설정했습니다.")
+                changed = True
+            else:
+                notes.append("배경음악은 그대로 두었습니다.")
+            if len(plan.audio) > 1:
+                notes.append(f"배경음악은 하나만 쓸 수 있어 나머지 {len(plan.audio) - 1}개는 무시했습니다.")
+        if plan.unsupported:
+            notes.append(describe_unsupported(plan.unsupported))
+        if plan.empty and not plan.unsupported:
+            notes.append("추가할 수 있는 파일이 없습니다.")
+        if changed:
+            self.model.commit()  # 한 번의 드롭 = 한 번의 실행 취소
+            if plan.media:
+                self.model.select("clip", inserted[0])
+        self.notify("\n".join(notes), warning=bool(plan.unsupported) or (plan.empty and not changed))
 
     def validate_current(self):
         issues = validate_project(self.model.project.to_dict(), self.model.project.base_dir)
