@@ -1,0 +1,264 @@
+# 영상 합성기 (Video Composer) 🎬🎤
+
+Grok 같은 AI 로 만든 **이미지·영상 클립을 AI 가 만든 JSON 프로젝트대로 자동 조립**하고,
+**떨림 없는 이미지 움직임**, 전환 효과, 자막, 배경음악, **마이크 더빙**까지 넣어 MP4 로 만드는 Windows 데스크톱 프로그램입니다.
+
+> AI 영상 도구의 자체 이어붙이기 기능은 이미지를 움직일 때 화면이 덜덜 떨리는 문제가 있습니다.
+> 이 프로그램은 이미지 움직임을 소수점 좌표로 계산해서 매끄럽게 만듭니다(아래 [떨림 방지 원리](#떨림-방지-원리) 참고).
+
+---
+
+## 주요 기능
+
+| 기능 | 설명 |
+|---|---|
+| 🤖 **AI 프롬프트 템플릿** | 작업 폴더의 파일 목록과 규칙을 담은 프롬프트를 자동으로 만들어 줍니다. AI 에 붙여넣으면 JSON 만 답하게 됩니다. |
+| 📋 **AI 답변 붙여넣기 + 검사** | 답변에 ` ```json ` 코드블록이나 설명 문장이 섞여 있어도 JSON 만 찾아냅니다. 끝 쉼표·주석 같은 흔한 실수도 고쳐 읽습니다. 없는 파일, 잘못된 숫자 등을 **한국어로** 알려 주고, AI 에게 다시 보낼 **수정 요청 프롬프트**도 만들어 줍니다. |
+| 🎞 **타임라인 + 미리보기** | 클립·자막·더빙·배경음악 트랙을 막대로 보여 줍니다. 저해상도 **미리보기 렌더(F5)** 를 재생하며 자막은 화면 위에 실시간으로 그립니다. |
+| 🛠 **미세 조정** | 클립 길이·속도·자르기·움직임·전환, 자막 시작/끝, 더빙 위치, 배경음악 시작·볼륨·페이드를 **0.1초 / 0.01초 버튼**과 숫자 입력(0.001초)으로 조절. 타임라인에서 끌어서 옮기기/길이 바꾸기/순서 바꾸기(Shift = 0.01초). 실행 취소(Ctrl+Z) 지원. 모든 수정은 프로젝트 JSON 에 저장됩니다. |
+| 🎤 **더빙** | **다음 자막을 미리** 보여 주고 "N초 후 표시", 현재 자막은 "N초 후 사라짐"과 진행 막대를 보여 줍니다. 자막 줄마다 프리롤(미리 재생)과 함께 녹음, 다시 녹음, 들어 보기, 연속 녹음 모드, 마이크 선택과 입력 레벨 미터, 녹음 중 원본 소리 줄이기. |
+| ⚙ **ffmpeg 렌더** | 해상도/fps/픽셀 형식 통일(꽉 채우기 또는 여백), 속도 조절(atempo 자동 연결), 목표 길이 맞춤, xfade/acrossfade 전환, 자막 입히기 또는 소프트 자막, 더빙 + 배경음악 믹스와 **목소리 나올 때 음악 자동 줄이기(덕킹)**. NVIDIA GPU(NVENC) 자동 감지. 진행률 표시와 취소. |
+| ⚡ **클립 캐시** | 클립별 중간 파일을 저장해 두고, 한 클립만 고치면 그 클립만 다시 만듭니다. |
+
+---
+
+## 설치와 실행 (Windows)
+
+### 방법 1 — 파이썬으로 실행 (권장)
+
+1. [python.org](https://www.python.org/downloads/) 에서 **Python 3.11 ~ 3.13** 을 설치합니다. 설치 첫 화면에서 **"Add python.exe to PATH"** 를 꼭 체크하세요.
+2. 이 저장소를 내려받습니다.
+   ```bat
+   git clone https://github.com/knhanul/dubbing.git
+   cd dubbing
+   ```
+   (git 이 없으면 GitHub 페이지의 **Code ▸ Download ZIP** 으로 받아 압축을 푸세요.)
+3. **`run.bat`** 을 더블클릭합니다. 처음 한 번은 가상환경(.venv)을 만들고 필요한 패키지를 설치하느라 몇 분 걸립니다.
+
+명령 프롬프트에서 직접 실행하려면:
+```bat
+py -3 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m composer
+:: 프로젝트 파일을 바로 열기
+.venv\Scripts\python -m composer D:\작업\project.json
+```
+
+ffmpeg 는 따로 설치하지 않아도 됩니다(`imageio-ffmpeg` 패키지에 들어 있음). 직접 받은 ffmpeg 를 쓰려면
+`ffmpeg.exe` 를 프로그램 폴더에 두거나 PATH 에 넣거나, 환경변수 `COMPOSER_FFMPEG` 에 경로를 지정하세요.
+
+### 방법 2 — exe 만들기
+
+**`build.bat`** 을 더블클릭하면 `dist\VideoComposer\VideoComposer.exe` 가 만들어집니다.
+`dist\VideoComposer` **폴더 전체**를 원하는 곳에 복사해서 쓰면 됩니다(파이썬이 없는 PC 에서도 실행).
+
+---
+
+## 사용 순서
+
+### 1. 폴더 준비
+이미지(png/jpg/webp…), 영상(mp4/mov/webm…), 배경음악(mp3/wav/m4a…), 자막(srt/vtt)을 **한 폴더**에 넣습니다.
+파일 이름에 순서를 붙여 두면(`01_바다.png`, `02_산책.mp4` …) AI 가 순서를 정하기 쉽습니다.
+
+### 2. AI 에게 프로젝트 JSON 받기
+1. **파일 ▸ AI 프롬프트로 새 프로젝트 (Ctrl+N)** → 폴더 선택.
+2. "원하는 영상 설명"에 원하는 느낌을 적고(예: *30초 여행 브이로그, 사진은 천천히 확대, 영상은 소리 끄고*) **프롬프트 만들기** → **📋 프롬프트 복사**.
+3. Grok 등 AI 에 붙여넣고 답을 받습니다.
+4. **② AI 답변 붙여넣기** 탭에서 답변 전체를 붙여넣고 **검사하기**.
+   - 문제가 있으면 목록에 빨간색(오류)/노란색(경고)으로 표시됩니다. **수정 요청 프롬프트 복사** → AI 에 보내고 새 답을 다시 붙여넣으세요.
+   - 문제가 없으면 **✔ 이 프로젝트 열기** → 폴더에 `project.json` 으로 저장됩니다.
+
+### 3. 미리보기와 미세 조정
+- **F5 (미리보기 렌더)**: 360p 저해상도로 빠르게 만들어 재생합니다. 자막과 더빙은 렌더 없이 바로 반영됩니다.
+- 타임라인에서 항목을 클릭하면 오른쪽 **🛠 미세 조정** 탭에 값이 나옵니다.
+  - 클립: 표시 시간, 재생 속도, 목표 길이(속도 자동), 시작/끝 자르기, 원본 소리, 움직임 종류·강도·속도감, 화면 맞춤, 전환
+  - 자막: 내용, 시작/끝(±0.1 / ±0.01초), 한 줄 이동, "이후 자막 모두 이동", 삭제
+  - 더빙 테이크: 오프셋, 볼륨, 듣기
+  - **프로젝트 설정** 탭: 출력 크기·fps, 기본 전환, 자막 전체 오프셋·글꼴·크기·색, 배경음악(시작, 파일 내 시작 위치, 볼륨, 페이드, 반복, 덕킹), 더빙 볼륨·녹음 지연 보정
+- 타임라인 마우스 조작
+  - 클립 끌기 = 순서 바꾸기, 클립 오른쪽 끝 끌기 = 길이 조절
+  - 자막 끌기 = 이동, 자막 양 끝 끌기 = 시작/끝 조절
+  - 더빙·배경음악 끌기 = 위치 이동
+  - **Shift 를 누르고 끌면 0.01초 단위**, Ctrl + 휠 = 확대/축소, 눈금 클릭 = 재생 위치 이동
+
+### 4. 더빙 (마이크 녹음)
+오른쪽 **🎤 더빙 / 자막** 탭:
+- 위쪽에 **현재 자막**(N초 후 사라짐 + 진행 막대)과 **다음 자막 미리 보기**(N초 후 표시)가 크게 나옵니다. 3초 전부터 숫자 카운트다운이 뜹니다.
+- 자막 목록에서 줄을 고르고 **● 이 줄 녹음 (R)** → 프리롤(기본 2초) 전부터 영상이 재생되며 녹음되고, 자막이 끝나면(+여유 0.5초) 자동으로 멈춥니다. 다시 누르면 새 버전으로 다시 녹음(이전 파일은 지워지지 않음).
+- **● 연속 녹음 (Shift+R)**: 현재 위치부터 영상 전체를 이어서 녹음합니다.
+- **녹음 중 원본 소리**: 녹음하는 동안 원본 소리 크기(기본 20%). 헤드폰 사용을 권장합니다.
+- 녹음 파일은 프로젝트 폴더의 `takes\` 에 WAV 로 저장되고 프로젝트에 자동 등록됩니다.
+- 목소리가 늘 조금 늦게 들리면 **프로젝트 설정 ▸ 녹음 지연 보정(ms)** 을 올리세요.
+- 자막 파일만 있는 완성 영상에 목소리만 입히고 싶다면 **파일 ▸ 동영상 + 자막으로 더빙 시작** 을 쓰세요(렌더 없이 원본을 바로 재생).
+
+### 5. 최종 렌더
+**렌더 ▸ 최종 렌더 (Ctrl+E)** → 저장 위치, 인코더(자동/GPU/CPU), 움직임 품질 선택 → 렌더 시작.
+**렌더 ▸ 목소리만 WAV 로 내보내기** 로 더빙만 따로 저장할 수도 있습니다.
+
+### 단축키
+| 키 | 동작 |
+|---|---|
+| Space | 재생 / 일시정지 (녹음 중이면 정지) |
+| R / Shift+R | 선택한 자막 줄 녹음 / 연속 녹음 |
+| ← / → | 이전 / 다음 자막 줄 |
+| Ctrl+← / → | 0.1초 뒤로 / 앞으로 (Shift 추가 = 1초) |
+| [ / ] | 선택한 자막·테이크·배경음악을 0.1초 앞당기기 / 늦추기 (Shift = 0.01초) |
+| F5 | 미리보기 렌더 |
+| Ctrl+E | 최종 렌더 |
+| Ctrl+Z / Ctrl+Y | 실행 취소 / 다시 실행 |
+| Ctrl+S | 저장 |
+
+---
+
+## 프로젝트 JSON 형식
+
+정식 JSON Schema: [`schema/project.schema.json`](schema/project.schema.json) · 전체 예시: [`examples/project_example.json`](examples/project_example.json)
+
+시간 단위는 모두 **초**, 파일 경로는 **프로젝트 파일이 있는 폴더 기준 상대 경로**입니다.
+
+```json
+{
+  "version": 1,
+  "title": "여행 브이로그",
+  "output": { "width": 1920, "height": 1080, "fps": 30, "fit": "cover", "file": "output.mp4" },
+  "transition": { "type": "crossfade", "duration": 0.5 },
+  "clips": [
+    { "file": "01_바다.png", "type": "image", "duration": 4, "motion": "zoom_in", "motion_strength": 0.15 },
+    { "file": "02_산책.mp4", "type": "video", "trim_start": 1, "trim_end": 6, "speed": 1.0, "mute": true,
+      "transition": { "type": "fade", "duration": 0.8 } },
+    { "file": "03_타임랩스.mp4", "type": "video", "fit_duration": 3.0 }
+  ],
+  "subtitle": { "file": "자막.srt", "offset": 0.0, "burn_in": true,
+                "style": { "font": "Malgun Gothic", "size": 52, "color": "#FFFFFF", "outline": 2.5 } },
+  "bgm": { "file": "음악.mp3", "volume": 0.25, "fade_in": 1.5, "fade_out": 3, "loop": true, "duck_under_voice": true },
+  "dubbing": { "folder": "takes", "takes": [ { "file": "takes/line_0001_v1.wav", "subtitle": 1, "offset": -2.0 } ] }
+}
+```
+
+### output (출력)
+| 항목 | 기본값 | 설명 |
+|---|---|---|
+| width, height | 1920, 1080 | 출력 크기(짝수). 세로 쇼츠는 1080×1920 |
+| fps | 30 | 프레임 수 |
+| fit | `cover` | `cover` 꽉 채우고 넘치는 부분 잘라냄 / `contain` 전체를 보이고 남는 곳은 여백 |
+| background | `#000000` | contain 여백 색 |
+| original_volume | 1.0 | 모든 클립 원본 소리에 곱하는 전체 볼륨 |
+| file | `output.mp4` | 최종 렌더 기본 파일 이름 |
+
+### transition (기본 전환) / clips[].transition (클립별)
+클립의 `transition` 은 **이전 클립 → 이 클립**으로 넘어가는 전환입니다. 생략하면 최상위 `transition` 을 씁니다.
+- `type`: `none`(바로 전환), `fade`(검은 화면 거치기), `crossfade`(겹치며 바뀜), 그 밖에 ffmpeg xfade 이름
+  `wipeleft, wiperight, wipeup, wipedown, slideleft, slideright, slideup, slidedown, circleopen, circleclose, dissolve, smoothleft, smoothright, radial, zoomin`
+- `duration`: 전환 길이(초). 전환 동안 두 클립이 겹치므로 전체 길이가 그만큼 줄어듭니다. 앞뒤 클립 중 짧은 쪽 길이의 절반을 넘으면 자동으로 줄어듭니다.
+
+### clips[] (클립)
+| 항목 | 기본값 | 설명 |
+|---|---|---|
+| file | (필수) | 파일 이름 |
+| type | 확장자로 추정 | `image` 또는 `video` |
+| duration | 4 | **이미지** 표시 시간 |
+| motion | `none` | 이미지 움직임: `zoom_in, zoom_out, pan_left, pan_right, pan_up, pan_down, zoom_in_left, zoom_in_right, ken_burns` |
+| motion_strength | 0.15 | 움직임 크기 0~1 (0.1~0.25 권장) |
+| motion_easing | `ease` | `ease` 부드럽게 가속/감속, `linear` 일정한 속도 |
+| speed | 1.0 | **영상** 재생 속도(0.1~16). 소리도 음정 유지하며 같이 바뀝니다 |
+| fit_duration | null | 지정하면 이 길이에 맞도록 속도를 자동 계산(speed 무시). 이미지는 duration 대신 사용 |
+| trim_start / trim_end | 0 / null | 영상에서 사용할 구간(원본 기준 초) |
+| mute | false | 원본 소리 끄기 |
+| volume | 1.0 | 원본 소리 크기 |
+| fit | null | 이 클립만 `cover`/`contain` 따로 지정 |
+| label | "" | 타임라인에 보일 이름표 |
+
+### subtitle (자막)
+| 항목 | 설명 |
+|---|---|
+| file | SRT 또는 VTT (UTF-8, UTF-8 BOM, CP949/EUC-KR, UTF-16 자동 인식) |
+| offset | 모든 자막을 앞뒤로 이동(초, 음수 가능) |
+| burn_in | `true` 영상에 글자를 입힘 / `false` 켜고 끌 수 있는 소프트 자막(mov_text) |
+| style | `font`, `size`(출력 높이 기준 px), `color`, `outline_color`, `outline`, `bold`, `margin_v` |
+| items | 프로그램에서 자막을 미세 조정하면 생기는 목록(`index, start, end, text`). 있으면 파일 대신 이것을 씁니다. **수정한 자막을 SRT 로 저장** 버튼으로 내보낼 수 있습니다 |
+
+### bgm (배경음악)
+`file`, `volume`(0.3), `start_offset`(타임라인에서 시작하는 시점), `file_start`(음악 파일 안에서 시작 위치),
+`fade_in`, `fade_out`, `loop`(영상보다 짧으면 반복), `duck_under_voice`(더빙 목소리가 나오면 자동으로 줄이기), `duck_ratio`(줄이는 강도 1~20).
+
+### dubbing (더빙)
+`folder`(녹음 파일 폴더), `volume`(목소리 전체 볼륨), `latency_ms`(녹음 지연 보정), `takes[]`:
+- `file`: 녹음 WAV
+- `subtitle`: 자막 번호(이 자막 시작 시점 기준으로 배치). `null` 이면 `offset` 이 절대 시간(연속 녹음)
+- `offset`: 자막 시작 기준 위치(초). 프리롤을 포함해 녹음하므로 보통 `-2.0` 같은 음수
+- `volume`: 이 테이크 볼륨
+
+자막을 옮기면 연결된 더빙 테이크도 같이 움직입니다.
+
+---
+
+## 떨림 방지 원리
+
+ffmpeg 의 흔한 방법(`zoompan`)은 매 프레임 잘라낼 위치를 **정수 픽셀로 반올림**합니다. 그래서 천천히 움직이면
+"0, 0, 1, 0, 0, 1 픽셀"처럼 불규칙하게 움직여 떨려 보입니다. 이 프로그램은
+
+1. 이미지를 출력 크기의 2배(설정에 따라 1~3배)로 고품질 확대한 뒤,
+2. `perspective` 필터로 잘라낼 영역의 네 꼭짓점을 **소수점 좌표**로 매 프레임 계산해 bicubic 보간으로 샘플링하고,
+3. 마지막에 출력 크기로 lanczos 축소합니다.
+4. 줌·위치는 프레임 번호에 대한 연속 함수(선형 또는 코사인 이징)이고, 모든 클립은 같은 고정 fps 로 맞춥니다.
+
+`tests/test_render_e2e.py` 에서 위상 상관(phase correlation)으로 프레임 간 이동량을 재서 확인합니다.
+같은 패닝을 측정한 결과(프레임 간 이동량의 불규칙성, 0 에 가까울수록 매끄러움): 일반 zoompan **약 0.68px**,
+zoompan 4배 확대 **약 0.30px**, 이 프로그램 **약 0.06px**(중간 파일 기준).
+
+## 렌더 구조와 캐시
+
+1. 각 클립을 같은 해상도·fps·yuv420p·48kHz 스테레오로 맞춘 중간 파일(`.composer_cache\clip_*.mkv`)로 만듭니다.
+   클립 설정과 원본 파일이 같으면 다시 만들지 않습니다(전환·자막·음악·더빙만 바꾸면 클립은 전부 캐시 사용).
+2. 중간 파일들을 xfade/acrossfade/concat 으로 잇고, 자막·더빙·배경음악을 섞어 최종 파일을 만듭니다.
+- 미리보기는 360p + 빠른 설정이라 금방 끝납니다. 최종 렌더는 원래 해상도로 다시 만듭니다.
+- 캐시가 커지면 **렌더 ▸ 렌더 캐시 비우기**.
+- NVIDIA 그래픽카드가 있으면 `h264_nvenc` 를 자동으로 씁니다(실제로 인코딩이 되는지 시험한 뒤 선택). 없으면 `libx264`.
+- 렌더 로그는 `.composer_cache\work_final\*.log` (미리보기는 `work_draft`) 에 남습니다.
+
+---
+
+## 폴더 구조
+
+```
+composer/
+  schema.py            프로젝트 데이터 모델 + JSON Schema
+  validate.py          AI 답변에서 JSON 추출, 검증(한국어 메시지), 수정 요청 프롬프트
+  prompt_template.py   폴더 스캔 + AI 프롬프트 생성
+  subtitles.py         SRT/VTT 읽기·쓰기, 인코딩 자동 인식, 오프셋, 카운트다운 계산
+  timeline.py          클립 길이·속도·fit_duration·전환 겹침·더빙 배치 계산
+  probe.py             ffmpeg/ffprobe 찾기, 미디어 정보
+  render/
+    ffmpeg_builder.py  ffmpeg 명령 생성(클립 정규화, 떨림 없는 움직임, 조립/믹스)
+    runner.py          렌더 실행·진행률·취소·캐시, 목소리 WAV 내보내기
+    encoders.py        NVENC 자동 감지
+  dubbing/
+    recorder.py        마이크 녹음(sounddevice) + 입력 레벨
+    takes.py           테이크 파일 이름/등록
+  ui/                  PySide6 화면 (메인 창, 미리보기, 타임라인, 미세 조정, 더빙, AI 프롬프트, 렌더)
+schema/project.schema.json
+examples/              예시 프로젝트, 예시 AI 답변
+tests/                 단위 테스트 + 실제 ffmpeg 렌더 테스트 + UI 스모크 테스트
+run.bat / build.bat / run_tests.bat
+```
+
+## 테스트
+
+```bat
+run_tests.bat
+:: 또는
+.venv\Scripts\python -m pip install -r requirements-dev.txt
+.venv\Scripts\python -m pytest -q
+```
+JSON 추출·검증, SRT/VTT 파싱과 인코딩, 오프셋·미세 조정, 타임라인 계산(속도·fit_duration·전환 겹침),
+ffmpeg 명령 생성, 실제 렌더(합성 이미지/영상/음악/자막/더빙으로 짧은 영상 생성, 길이·소리·캐시·취소 확인),
+떨림 측정, 화면 없이 UI 띄우기 테스트가 들어 있습니다.
+
+## 알아 둘 점 / 제한
+
+- 미리보기 화면은 저해상도 렌더 영상입니다. 클립·전환·음악을 바꾸면 **F5** 로 다시 만들어야 화면에 반영됩니다(자막·더빙 위치는 즉시 반영).
+- 미리보기에서 더빙 테이크는 실시간으로 함께 재생되지만, 재생 도중 테이크 중간으로 이동하면 그 테이크는 다음 재생부터 들립니다.
+- 녹음 타이밍은 사운드 장치 지연에 따라 수십 ms 어긋날 수 있습니다. **녹음 지연 보정** 또는 테이크 오프셋으로 맞추세요.
+- 고해상도(1080p 이상) 이미지 움직임은 계산량이 많습니다(8코어 CPU 기준 4초 클립에 약 9초). "빠르게(1배)" 품질로 줄일 수 있습니다.
+- 자막 글꼴은 Windows 에 설치된 글꼴 이름을 씁니다(기본 `Malgun Gothic` / 맑은 고딕).
+- 애니메이션 GIF 는 첫 프레임만 이미지로 사용합니다.
