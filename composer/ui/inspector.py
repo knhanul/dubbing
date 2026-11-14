@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDoubleSpinBo
 
 from ..schema import (EASINGS, FITS, MOTION_LABELS, MOTIONS, TRANSITION_LABELS, TRANSITIONS, Clip, Transition,
                       guess_type)
-from ..subtitles import ensure_items, to_srt
+from ..subtitles import detach_takes, ensure_items, has_subtitles, to_srt
 from .model import ProjectModel
 from .widgets import NudgeSpin
 
@@ -342,6 +342,7 @@ class SubtitlePage(_Page):
     def _delete(self):
         it = self.item()
         if it:
+            detach_takes(self.model.project, {it.index})
             self.model.project.subtitle.items = [x for x in ensure_items(self.model.project) if x is not it]
             self.model.commit()
             self.model.select("")
@@ -404,6 +405,8 @@ class TakePage(_Page):
 class ProjectPage(QWidget):
     """출력 / 전역 전환 / 자막 / 배경음악 / 더빙 설정."""
 
+    remove_subtitles_requested = Signal()
+
     def __init__(self, model: ProjectModel):
         super().__init__()
         self.model = model
@@ -447,6 +450,8 @@ class ProjectPage(QWidget):
         fs = QFormLayout(g_sub)
         self.sub_file = QLabel("-")
         self.btn_sub = QPushButton("자막 파일 선택…")
+        self.btn_sub_clear = QPushButton("자막 전체 제거")
+        self.btn_sub_clear.setToolTip("프로젝트에서 자막을 모두 뺍니다. 원본 SRT 파일은 지워지지 않습니다.")
         self.btn_sub_export = QPushButton("수정한 자막을 SRT 로 저장…")
         self.sub_offset = NudgeSpin(-3600, 3600)
         self.burn = QCheckBox("영상에 자막 입히기(끄면 켜고 끌 수 있는 소프트 자막)")
@@ -456,7 +461,7 @@ class ProjectPage(QWidget):
         self.margin = QSpinBox(); self.margin.setRange(0, 2000)
         self.bold = QCheckBox("굵게")
         self.color = QPushButton(); self.ocolor = QPushButton()
-        r = QHBoxLayout(); r.addWidget(self.sub_file, 1); r.addWidget(self.btn_sub)
+        r = QHBoxLayout(); r.addWidget(self.sub_file, 1); r.addWidget(self.btn_sub); r.addWidget(self.btn_sub_clear)
         fs.addRow("파일", r)
         fs.addRow("", self.btn_sub_export)
         fs.addRow("전체 오프셋", self.sub_offset)
@@ -529,6 +534,7 @@ class ProjectPage(QWidget):
         self.tr_dur.valueChanged.connect(lambda v: self._set("gtd", lambda p: setattr(p.transition, "duration", v)))
         s = lambda: P().subtitle  # noqa: E731
         self.btn_sub.clicked.connect(self._pick_sub)
+        self.btn_sub_clear.clicked.connect(self.remove_subtitles_requested.emit)
         self.btn_sub_export.clicked.connect(self._export_sub)
         self.sub_offset.valueChanged.connect(lambda v: self._set("so", lambda p: setattr(p.subtitle, "offset", v)))
         self.burn.toggled.connect(lambda v: self._set("burn", lambda p: setattr(p.subtitle, "burn_in", v)))
@@ -604,7 +610,9 @@ class ProjectPage(QWidget):
         self.tr_type.setCurrentIndex(max(0, self.tr_type.findData(p.transition.type)))
         self.tr_dur.setValue(p.transition.duration)
         st = p.subtitle
-        self.sub_file.setText((st.file or "-") + (" (미세 조정됨)" if st.items is not None else ""))
+        self.sub_file.setText((st.file or ("-" if not st.items else "(파일 없음)")) + (" (미세 조정됨)" if st.items is not None else ""))
+        self.btn_sub_clear.setEnabled(has_subtitles(p))
+        self.btn_sub_export.setEnabled(has_subtitles(p))
         self.sub_offset.setValue(st.offset)
         self.burn.setChecked(st.burn_in)
         self.font.setText(st.style.font); self.size.setValue(st.style.size)

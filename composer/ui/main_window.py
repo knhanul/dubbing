@@ -85,6 +85,7 @@ class MainWindow(QMainWindow):
         self.player.view.viewport().setAcceptDrops(False)
         self.last_drop_report = ""
         self.inspector.take_page.play_requested.connect(self.dub.play_take)
+        self.inspector.project_page.remove_subtitles_requested.connect(self.remove_all_subtitles)
         self.dub.status.connect(lambda m: self.statusBar().showMessage(m, 6000))
         self.model.changed.connect(self._on_changed)
         self.model.selection_changed.connect(self._on_selection)
@@ -131,6 +132,9 @@ class MainWindow(QMainWindow):
         self._act(e, "클립 추가…", self.add_clips, "Ctrl+I")
         self._act(e, "AI 답변(JSON) 붙여넣기…", lambda: self.open_prompt_dialog(tab=1), "Ctrl+Shift+V")
         self._act(e, "검사하기 (파일·값 확인)", self.validate_current)
+        e.addSeparator()
+        self.act_clear_subs = self._act(e, "자막 전체 제거", self.remove_all_subtitles,
+                                        tip="프로젝트에서 자막을 모두 뺍니다(원본 SRT 파일은 그대로)")
 
         v = mb.addMenu("보기(&V)")
         self._act(v, "타임라인 확대", lambda: self.timeline.canvas.set_zoom(self.timeline.canvas.pps * 1.3), "Ctrl+=")
@@ -163,7 +167,7 @@ class MainWindow(QMainWindow):
             "Space : 재생 / 일시정지", "R : 선택한 자막 줄 녹음 (녹음 중이면 정지)", "Shift+R : 연속 녹음 시작/정지",
             "← / → : 이전 / 다음 자막 줄", "Ctrl+← / → : 0.1초 뒤로/앞으로 (Shift 를 더하면 1초)",
             "[ / ] : 선택한 자막·테이크를 0.1초 앞당기기/늦추기 (Shift = 0.01초)",
-            "Home : 처음으로", "F5 : 미리보기 렌더", "Ctrl+E : 최종 렌더", "Ctrl+Z / Ctrl+Y : 실행 취소 / 다시 실행",
+            "Delete : 선택한 클립 / 자막 줄 삭제", "Home : 처음으로", "F5 : 미리보기 렌더", "Ctrl+E : 최종 렌더", "Ctrl+Z / Ctrl+Y : 실행 취소 / 다시 실행",
             "Ctrl+S : 저장", "타임라인: 끌어서 이동, 끝을 끌어서 길이, Shift 끌기 = 0.01초, Ctrl+휠 = 확대",
         ]))
 
@@ -197,6 +201,11 @@ class MainWindow(QMainWindow):
         if k == Qt.Key_Delete and self.model.selection.kind == "clip":
             self.inspector.clip_page._delete()
             return True
+        if k == Qt.Key_Delete and self.model.selection.kind == "subtitle":
+            if self.model.cue_by_index(self.model.selection.index) is not None:
+                self.inspector.sub_page._delete()
+                self.statusBar().showMessage("자막 한 줄을 지웠습니다 (Ctrl+Z 로 되돌리기)", 5000)
+            return True
         return False
 
     def nudge_selected(self, d: float):
@@ -220,7 +229,29 @@ class MainWindow(QMainWindow):
         name = self.model.path.name if self.model.path else getattr(self, "untitled_name", "제목 없음")
         self.setWindowTitle(f"{APP_NAME} — {name}{' *' if self.model.dirty else ''}")
 
+    def remove_all_subtitles(self) -> bool:
+        """프로젝트에서 자막을 모두 뺍니다. 디스크의 자막 파일은 절대 지우지 않습니다."""
+        from ..subtitles import clear_subtitles, has_subtitles
+
+        if not has_subtitles(self.model.project):
+            return False
+        if not self.confirm("자막 전체 제거", "프로젝트에서 자막을 모두 뺄까요? 원본 SRT 파일은 지워지지 않습니다."):
+            return False
+        holder = {}
+        self.model.edit(lambda p: holder.setdefault("n", clear_subtitles(p)))  # 한 번의 실행 취소
+        if self.model.selection.kind == "subtitle":
+            self.model.select("")
+        self.player.refresh_overlay()
+        n = holder.get("n", 0)
+        self.statusBar().showMessage("자막을 모두 뺐습니다 (Ctrl+Z 로 되돌리기)"
+                                     + (f" · 더빙 {n}개는 지금 위치에 고정" if n else ""), 8000)
+        return True
+
     def _on_changed(self):
+        from ..subtitles import has_subtitles
+
+        if hasattr(self, "act_clear_subs"):
+            self.act_clear_subs.setEnabled(has_subtitles(self.model.project))
         self.player.refresh_overlay()
         if self.preview_is_direct and not self._direct_source():
             self.preview_is_direct = False

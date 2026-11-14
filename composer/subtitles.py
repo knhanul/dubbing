@@ -176,3 +176,32 @@ class CueTimeline:
             "until_end": (cur.end - t) if cur else None,
             "progress": ((t - cur.start) / cur.duration if cur and cur.duration else None),
         }
+
+
+def has_subtitles(project: Project) -> bool:
+    st = project.subtitle
+    return bool(st.file) or bool(st.items)
+
+
+def detach_takes(project: Project, indices: Optional[set] = None) -> int:
+    """자막에 연결된 더빙 테이크를 현재 타임라인 위치 그대로 '절대 위치'로 바꿉니다.
+    (자막을 지워도 녹음이 엉뚱한 곳으로 옮겨지지 않도록) indices 가 None 이면 전부."""
+    from .timeline import take_position
+
+    cues = {c.index: c for c in project_cues(project)}
+    n = 0
+    for t in project.dubbing.takes:
+        if t.subtitle is not None and (indices is None or t.subtitle in indices):
+            pos = take_position(t, cues, 0.0)
+            t.subtitle = None
+            t.offset = round(pos, 3)
+            n += 1
+    return n
+
+
+def clear_subtitles(project: Project) -> int:
+    """프로젝트에서 자막을 모두 뺍니다(디스크의 SRT 파일은 건드리지 않음). 위치를 고정한 테이크 수를 돌려줍니다."""
+    n = detach_takes(project)
+    project.subtitle.file = None
+    project.subtitle.items = None
+    return n
