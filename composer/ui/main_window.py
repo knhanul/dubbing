@@ -168,6 +168,7 @@ class MainWindow(QMainWindow):
         self.act_export_voice.triggered.connect(self.export_voice)
         f.addAction(self.act_export)
         f.addAction(self.act_export_voice)
+        self._act(f, "📄 대본 출력…", self.open_script_dialog, "Ctrl+P")
         f.addSeparator()
         self._act(f, "AI 로 구성하기…", self.open_prompt_dialog, "Ctrl+Shift+A")
         self._act(f, "동영상 + 자막으로 더빙 시작…", self.open_video_for_dubbing, "Ctrl+Shift+O")
@@ -215,7 +216,7 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         for text, slot in [("🤖 AI 로 구성하기", self.open_prompt_dialog), ("📂 열기", self.open_project),
                            ("💾 저장", self.save), ("➕ 클립", self.add_clips),
-                           ("📤 내보내기", self.render_final)]:
+                           ("📤 내보내기", self.render_final), ("📄 대본", self.open_script_dialog)]:
             a = QAction(text, self)
             a.triggered.connect(slot)
             tb.addAction(a)
@@ -225,7 +226,7 @@ class MainWindow(QMainWindow):
             "Space : 재생 / 일시정지 (미리보기가 없거나 만드는 중이면 타임라인 시간으로 재생)", "R : 선택한 자막 줄 녹음 (녹음 중이면 정지)", "Shift+R : 연속 녹음 시작/정지",
             "← / → : 이전 / 다음 자막 줄", "Ctrl+← / → : 0.1초 뒤로/앞으로 (Shift 를 더하면 1초)",
             "[ / ] : 선택한 자막·테이크를 0.1초 앞당기기/늦추기 (Shift = 0.01초)",
-            "Delete : 선택한 클립 / 자막 줄 삭제", "Home : 처음으로", "F5 : 미리보기 새로 만들기 (보통은 자동)", "Ctrl+E : 영상 내보내기", "Ctrl+Z / Ctrl+Y : 실행 취소 / 다시 실행",
+            "Delete : 선택한 클립 / 자막 줄 삭제", "Home : 처음으로", "F5 : 미리보기 새로 만들기 (보통은 자동)", "Ctrl+E : 영상 내보내기", "Ctrl+P : 대본 출력", "Ctrl+Z / Ctrl+Y : 실행 취소 / 다시 실행",
             "Ctrl+S : 저장", "타임라인: 끌어서 이동, 끝을 끌어서 길이, Shift 끌기 = 0.01초, Ctrl+휠 = 확대",
         ]))
 
@@ -927,6 +928,18 @@ class MainWindow(QMainWindow):
                                                    f"{res.clips_rendered}개 · 캐시 사용 {res.clips_cached}개\n\n폴더를 열까요?")
             if r == QMessageBox.Yes:
                 open_folder(out.parent)
+
+    def open_script_dialog(self):
+        """자막으로 대본 만들기 (인쇄 / PDF / Word / TXT / 클립보드)."""
+        from .script_dialog import ScriptDialog
+        name = self.model.project.title or (self.model.path.stem if self.model.path else "")
+        dlg = ScriptDialog(self.model.project, name, self)
+        self.exec_script_dialog(dlg)
+        dlg.deleteLater()
+
+    def exec_script_dialog(self, dlg):
+        """(테스트에서 바꿔 끼울 수 있음)"""
+        return dlg.exec()
 
     def exec_export_options(self, opt) -> bool:
         """내보내기 설정 창 (테스트에서 바꿔 끼울 수 있음)."""

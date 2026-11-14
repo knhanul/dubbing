@@ -16,6 +16,7 @@ if errorlevel 1 goto :fail
 ".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --windowed ^
     --name VideoComposer ^
     --collect-data imageio_ffmpeg ^
+    --collect-data docx ^
     --collect-all _sounddevice_data ^
     --collect-all _soundfile_data ^
     --add-data "schema;schema" ^
