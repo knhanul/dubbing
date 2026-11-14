@@ -36,6 +36,14 @@ BUILDER_VERSION = 4
 AUDIO_RATE = 48000
 
 
+def _default_fonts_dir() -> Optional[str]:
+    import os
+    if os.name != "nt":
+        return None
+    d = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+    return d if os.path.isdir(d) else None
+
+
 @dataclass
 class RenderSettings:
     draft: bool = False
@@ -43,6 +51,7 @@ class RenderSettings:
     upscale: int = 2  # 이미지 움직임 계산용 확대 배율(슈퍼샘플링)
     draft_height: int = 360
     burn_subtitles: Optional[bool] = None  # None 이면 project.subtitle.burn_in
+    fonts_dir: Optional[str] = field(default_factory=lambda: _default_fonts_dir())  # 자막 글꼴 폴더 (Windows)
 
     def size(self, project: Project) -> tuple[int, int]:
         w, h = int(project.output.width), int(project.output.height)
@@ -260,8 +269,10 @@ class AssemblyPlan:
 def build_assembly(project: Project, timeline: Timeline, clip_files: list[Path], settings: RenderSettings,
                    output: Path, cues: list[Cue], subs_name: Optional[str] = "subs.srt",
                    bgm_path: Optional[Path] = None, bgm_duration: Optional[float] = None,
-                   take_files: Optional[list[tuple[Path, float, float]]] = None) -> AssemblyPlan:
-    """take_files: (파일, 타임라인 위치(초), 볼륨) 목록. 자막 파일은 작업 폴더(cwd)에 subs_name 으로 있어야 합니다."""
+                   take_files: Optional[list[tuple[Path, float, float]]] = None,
+                   ass_name: Optional[str] = None) -> AssemblyPlan:
+    """take_files: (파일, 타임라인 위치(초), 볼륨) 목록. 자막 파일은 작업 폴더(cwd)에 subs_name 으로 있어야 합니다.
+    ass_name 이 있으면 새겨 넣는 자막은 그 ASS 파일(스타일·위치·효과 포함)을 씁니다."""
     w, h = settings.size(project)
     fps = float(project.output.fps)
     total = timeline.total
@@ -297,7 +308,14 @@ def build_assembly(project: Project, timeline: Timeline, clip_files: list[Path],
 
     burn = settings.burn_subtitles if settings.burn_subtitles is not None else project.subtitle.burn_in
     vlast = cur_v
-    if cues and burn and subs_name:
+    if cues and burn and ass_name:
+        extra = ""
+        if settings.fonts_dir:  # Windows: 설치된 글꼴 폴더도 찾아보게
+            fd = str(settings.fonts_dir).replace("\\", "/").replace(":", "\\:")
+            extra = f":fontsdir='{fd}'"
+        g.append(f"[{vlast}]subtitles=filename={ass_name}{extra}[vsub]")
+        vlast = "vsub"
+    elif cues and burn and subs_name:
         style = subtitle_force_style(project, h)
         g.append(f"[{vlast}]subtitles=filename={subs_name}:force_style='{style}'[vsub]")
         vlast = "vsub"

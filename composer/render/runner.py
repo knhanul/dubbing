@@ -12,6 +12,7 @@ from typing import Callable, Optional
 from ..probe import ffmpeg_path, popen_kwargs, probe
 from ..schema import Project
 from ..subtitles import project_cues, to_srt
+from .ass import build_ass
 from ..timeline import build_timeline
 from .ffmpeg_builder import (RenderSettings, build_assembly, build_clip_job, clip_cache_key,
                              take_entries)
@@ -141,10 +142,12 @@ def render_project(project: Project, output: Path | str, settings: RenderSetting
         done_w += w
 
     cues = project_cues(project)
-    subs_name = None
+    subs_name = ass_name = None
     if cues:
-        subs_name = "subs.srt"
+        subs_name = "subs.srt"  # 소프트 자막용
         (work / subs_name).write_text(to_srt(cues), encoding="utf-8")
+        ass_name = "subs.ass"  # 새겨 넣기용 (스타일·위치·나타나기 효과)
+        (work / ass_name).write_text(build_ass(project, cues), encoding="utf-8")
     takes = []
     for rel, pos, vol in take_entries(project, cues):
         p = project.resolve(rel)
@@ -158,7 +161,7 @@ def render_project(project: Project, output: Path | str, settings: RenderSetting
         bgm_dur = probe(bgm_path).duration
     tmp_out = output.with_name(output.stem + ".part" + output.suffix)
     plan = build_assembly(project, timeline, [j.output for j in jobs], settings, tmp_out, cues,
-                          subs_name, bgm_path, bgm_dur, takes)
+                          subs_name, bgm_path, bgm_dur, takes, ass_name=ass_name)
     msg = "최종 조립 중(전환·자막·더빙·배경음악)…"
     progress(done_w / total_w, msg)
     _run_ffmpeg(plan.args, plan.total, lambda f: progress((done_w + f * assemble_w) / total_w, msg),

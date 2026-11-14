@@ -36,6 +36,13 @@ class _View(QGraphicsView):
         self.progress_text = ""
         self.progress = None  # 0~1 또는 None
         self.empty_hint = ""
+        # 자막 스타일·효과 (실시간 근사)
+        from ..schema import SubtitleStyle
+        self.style = SubtitleStyle()
+        self.out_h = 1080
+        self.cue_elapsed = 99.0
+        self.cue_remaining = 99.0
+        self.cue_duration = 99.0
         self.setRenderHint(QPainter.Antialiasing)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -47,23 +54,13 @@ class _View(QGraphicsView):
         painter.resetTransform()
         vw, vh = self.viewport().width(), self.viewport().height()
         if self.text:
-            f = QFont(self.font())
-            f.setBold(True)
-            f.setPixelSize(max(14, int(vh * 0.055)))
-            lines = self.text.split("\n")
-            lh = f.pixelSize() * 1.3
-            y0 = vh - vh * 0.06 - lh * len(lines)
-            from PySide6.QtGui import QFontMetricsF
+            from ..subtitle_style import appear_state
+            from .sub_paint import paint_subtitle
 
-            fm = QFontMetricsF(f)
-            for i, line in enumerate(lines):
-                w = fm.horizontalAdvance(line)
-                path = QPainterPath()
-                path.addText((vw - w) / 2, y0 + lh * (i + 1), f, line)
-                painter.setPen(QPen(QColor("#000000"), max(2, f.pixelSize() / 9), Qt.SolidLine, Qt.RoundCap,
-                                    Qt.RoundJoin))
-                painter.drawPath(path)
-                painter.fillPath(path, QColor("#ffffff"))
+            frame = self.mapFromScene(self.sceneRect()).boundingRect()
+            frame = QRectF(frame).intersected(QRectF(0, 0, vw, vh)) or QRectF(0, 0, vw, vh)
+            st = appear_state(self.style, self.text, self.cue_elapsed, self.cue_remaining, self.cue_duration)
+            paint_subtitle(painter, frame, self.text, self.style, self.out_h, st)
         if self.empty_hint:
             f = QFont(self.font())
             f.setPixelSize(max(14, int(vh * 0.04)))
@@ -128,6 +125,7 @@ class PreviewPlayer(QWidget):
         self.view = _View(self.scene)
         self.media_path: Optional[Path] = None
         self.subtitle_fn = None  # t -> str
+        self.cue_fn = None  # t -> (text, 나타난 뒤 초, 사라지기까지 초, 길이) | None  (있으면 subtitle_fn 대신)
         self._base_volume = 1.0
         self._raw_ms, self._raw_at = -1, 0.0
 
@@ -228,6 +226,12 @@ class PreviewPlayer(QWidget):
         if self._v_playing:
             self._v_pos = self._v_now()
             self._v_playing = False
+
+    def set_subtitle_style(self, style, out_h: int) -> None:
+        """자막 스타일이 바뀌면 바로 다시 그림 (미리보기 렌더 없이)."""
+        self.view.style = style
+        self.view.out_h = out_h
+        self.view.viewport().update()
 
     def set_progress(self, text: str, fraction) -> None:
         """미리보기 만드는 중 표시 (영상 가운데)."""
@@ -368,10 +372,21 @@ class PreviewPlayer(QWidget):
         if not self.slider.isSliderDown():
             self.slider.setValue(int(t * 1000))
         self.lbl_time.setText(f"{fmt_time(t)} / {fmt_time(self.duration())}")
-        text = self.subtitle_fn(t) if self.subtitle_fn else ""
-        if text != self.view.text:
-            self.view.text = text
-            self.view.viewport().update()
+        v = self.view
+        if self.cue_fn is not None:
+            info = self.cue_fn(t)
+            text, el, rem, dur = info if info else ("", 99.0, 99.0, 99.0)
+            animating = bool(text) and v.style.appear != "none" and (el < max(v.style.appear_duration, 0.05) + 0.1
+                                                                       or (v.style.appear == "typing" and el < dur)
+                                                                       or (v.style.appear == "fade" and rem < 0.2))
+            changed = text != v.text or animating or (v.cue_elapsed < 1.5 and el >= 1.5)
+            v.cue_elapsed, v.cue_remaining, v.cue_duration = el, rem, dur
+        else:
+            text = self.subtitle_fn(t) if self.subtitle_fn else ""
+            changed = text != v.text
+        if changed:
+            v.text = text
+            v.viewport().update()
         self.position_changed.emit(t)
 
     def refresh_overlay(self):

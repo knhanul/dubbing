@@ -277,10 +277,24 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
             v.boolean(st, "burn_in", "subtitle")
             if isinstance(st.get("style"), dict):
                 sty = st["style"]
-                v.unknown(sty, {"font", "size", "color", "outline_color", "outline", "bold", "margin_v"}, "subtitle.style")
-                v.num(sty, "size", "subtitle.style", 8, 300)
-                v.num(sty, "outline", "subtitle.style", 0, 20)
-                v.num(sty, "margin_v", "subtitle.style", 0, 2000)
+                sp = "subtitle.style"
+                v.unknown(sty, {"font", "size", "color", "outline_color", "outline", "bold", "margin_v", "position",
+                                "box", "box_color", "box_opacity", "box_padding", "appear", "appear_duration"}, sp)
+                v.num(sty, "size", sp, 8, 300)
+                v.num(sty, "outline", sp, 0, 20)
+                v.num(sty, "margin_v", sp, 0, 2000)
+                v.num(sty, "box_opacity", sp, 0, 1)
+                v.num(sty, "box_padding", sp, 0, 200)
+                v.num(sty, "appear_duration", sp, 0, 5)
+                v.enum(sty, "position", sp, ["bottom", "center", "top"])
+                v.enum(sty, "appear", sp, ["none", "fade", "typing", "slide_up", "pop"])
+                v.boolean(sty, "bold", sp)
+                v.boolean(sty, "box", sp)
+                for ck in ("color", "outline_color", "box_color"):
+                    if ck in sty and not re.fullmatch(r"#[0-9A-Fa-f]{6}", str(sty[ck])):
+                        v.err(f"{sp}.{ck}", "#RRGGBB 형식의 색이어야 합니다. 예: \"#FFFFFF\"")
+                if "font" in sty and (not isinstance(sty["font"], str) or not sty["font"].strip()):
+                    v.err(f"{sp}.font", "글꼴 이름(문자열)이어야 합니다. 예: \"Malgun Gothic\"")
             if isinstance(st.get("items"), list):
                 for j, it in enumerate(st["items"]):
                     pp = f"subtitle.items[{j}]"

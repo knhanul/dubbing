@@ -266,10 +266,12 @@
               "maximum": 300
             },
             "color": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{6}$"
             },
             "outline_color": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{6}$"
             },
             "outline": {
               "type": "number",
@@ -281,6 +283,44 @@
             "margin_v": {
               "type": "integer",
               "minimum": 0
+            },
+            "position": {
+              "enum": [
+                "bottom",
+                "center",
+                "top"
+              ]
+            },
+            "box": {
+              "type": "boolean"
+            },
+            "box_color": {
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{6}$"
+            },
+            "box_opacity": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "box_padding": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 200
+            },
+            "appear": {
+              "enum": [
+                "none",
+                "fade",
+                "typing",
+                "slide_up",
+                "pop"
+              ]
+            },
+            "appear_duration": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 5
             }
           },
           "additionalProperties": false

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from .subtitle_style import APPEAR_LABELS, POSITION_LABELS
 from .schema import MOTIONS, TRANSITIONS, guess_type
 
 
@@ -68,7 +69,11 @@ EXAMPLE = {
          "mute": True, "transition": {"type": "fade", "duration": 0.8}},
         {"file": "scene3.png", "type": "image", "duration": 3.5, "motion": "pan_right", "motion_strength": 0.2},
     ],
-    "subtitle": {"file": "subtitle.srt", "offset": 0.0, "burn_in": True},
+    "subtitle": {"file": "subtitle.srt", "offset": 0.0, "burn_in": True,
+                 "style": {"font": "Malgun Gothic", "size": 52, "bold": True, "color": "#FFFFFF",
+                           "outline_color": "#000000", "outline": 2.5, "position": "bottom", "margin_v": 70,
+                           "box": True, "box_color": "#000000", "box_opacity": 0.5, "box_padding": 12,
+                           "appear": "fade", "appear_duration": 0.3}},
     "bgm": {"file": "music.mp3", "volume": 0.3, "fade_in": 1.0, "fade_out": 2.0, "loop": True,
             "duck_under_voice": True},
 }
@@ -89,7 +94,14 @@ RULES = f"""규칙:
      type 값: {", ".join(TRANSITIONS)}  (duration 은 0.3~1.5 권장)
 5. output: width/height 는 짝수, fps 는 24/30/60 중 하나 권장. fit 은 "cover"(꽉 채움) 또는 "contain"(여백).
 6. subtitle.file 에는 .srt 파일, bgm.file 에는 음악 파일을 넣는다. 없으면 해당 항목을 생략한다.
-7. 숫자에 따옴표를 붙이지 않는다. true/false/null 은 소문자로 쓴다."""
+7. subtitle.style (자막 모양, 생략 가능 — 영상 분위기에 맞게 골라도 됨):
+   - font: Windows 글꼴 이름 (한글이 되는 글꼴: "Malgun Gothic", "Nanum Gothic", "NanumMyeongjo", "Gulim" 등)
+   - size: 출력 높이 기준 픽셀 (1080p 에서 40~64 권장), bold: true/false
+   - color / outline_color / box_color: "#RRGGBB", outline: 외곽선 두께 px (0~6 권장)
+   - position: {" / ".join(f'"{k}"({v})' for k, v in POSITION_LABELS.items())}, margin_v: 아래/위 가장자리 여백 px
+   - box: true 면 글자 뒤에 배경 상자, box_opacity: 0~1, box_padding: 상자 여백 px
+   - appear: {" / ".join(f'"{k}"({v})' for k, v in APPEAR_LABELS.items())}, appear_duration: 효과 시간(초, 0.2~0.6 권장)
+8. 숫자에 따옴표를 붙이지 않는다. true/false/null 은 소문자로 쓴다."""
 
 
 def build_prompt(entries: list[FileEntry], request: str = "", width: int = 1920, height: int = 1080,

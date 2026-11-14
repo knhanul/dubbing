@@ -110,7 +110,18 @@ class SubtitleStyle:
     outline_color: str = "#000000"
     outline: float = 2.0
     bold: bool = True
-    margin_v: int = 60
+    margin_v: int = 60  # 아래/위 위치일 때 화면 가장자리에서 떨어진 거리(px). 가운데면 위(-)/아래(+) 이동은 없음
+    position: str = "bottom"  # bottom(아래) | center(가운데) | top(위)
+    box: bool = False  # 글자 뒤 배경 상자
+    box_color: str = "#000000"
+    box_opacity: float = 0.6  # 0~1
+    box_padding: int = 12  # 상자 여백(px)
+    appear: str = "none"  # none(그냥) | fade(페이드) | typing(타이핑) | slide_up(아래에서 올라오기) | pop(톡 튀어나오기)
+    appear_duration: float = 0.3  # 나타나는 효과 시간(초). 타이핑은 한 줄 전체를 치는 시간(최소 글자당 0.04초)
+
+
+SUB_POSITIONS = ("bottom", "center", "top")
+SUB_APPEARS = ("none", "fade", "typing", "slide_up", "pop")
 
 
 @dataclass
@@ -340,11 +351,18 @@ JSON_SCHEMA: dict = {
                     "properties": {
                         "font": {"type": "string"},
                         "size": {"type": "integer", "minimum": 8, "maximum": 300},
-                        "color": {"type": "string"},
-                        "outline_color": {"type": "string"},
+                        "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+                        "outline_color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
                         "outline": {"type": "number", "minimum": 0},
                         "bold": {"type": "boolean"},
                         "margin_v": {"type": "integer", "minimum": 0},
+                        "position": {"enum": ["bottom", "center", "top"]},
+                        "box": {"type": "boolean"},
+                        "box_color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+                        "box_opacity": {"type": "number", "minimum": 0, "maximum": 1},
+                        "box_padding": {"type": "integer", "minimum": 0, "maximum": 200},
+                        "appear": {"enum": ["none", "fade", "typing", "slide_up", "pop"]},
+                        "appear_duration": {"type": "number", "minimum": 0, "maximum": 5},
                     },
                     "additionalProperties": False,
                 },

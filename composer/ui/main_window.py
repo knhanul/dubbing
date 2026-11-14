@@ -18,6 +18,7 @@ from ..render.runner import cache_dir, clear_cache
 from ..schema import Clip, Project, SubtitleSettings, Transition, guess_type
 from ..validate import has_errors, validate_project
 from .auto_preview import AutoPreview
+from .subtitle_style_panel import SubtitleStylePanel
 from .dnd import ClipListPanel, paths_from_mime
 from .dubbing_panel import DubbingPanel
 from .inspector import Inspector, _rel
@@ -57,6 +58,7 @@ class MainWindow(QMainWindow):
 
         self.player = PreviewPlayer()
         self.player.subtitle_fn = self._subtitle_at
+        self.player.cue_fn = self._cue_at
         self.player.placeholder_fn = self._placeholder_at
         self.player.before_play = self._before_play
         self._thumbs: dict = {}
@@ -70,6 +72,8 @@ class MainWindow(QMainWindow):
         self.right.addTab(self.dub, "🎤 더빙 / 자막")
         self.right.addTab(self.inspector, "🛠 미세 조정")
         self.right.addTab(self.clip_panel, "🎞 클립 목록")
+        self.style_panel = SubtitleStylePanel(self.model)
+        self.right.addTab(self.style_panel, "🅰 자막 스타일")
         self.right.currentChanged.connect(lambda i: self.dub.ensure_devices() if i == 0 else None)
         top = QSplitter(Qt.Horizontal)
         top.addWidget(self.player)
@@ -92,6 +96,7 @@ class MainWindow(QMainWindow):
         self.last_drop_report = ""
         self.inspector.take_page.play_requested.connect(self.dub.play_take)
         self.inspector.project_page.remove_subtitles_requested.connect(self.remove_all_subtitles)
+        self.inspector.project_page.style_requested.connect(self.show_style_tab)
         self.dub.status.connect(lambda m: self.statusBar().showMessage(m, 6000))
         self.model.changed.connect(self._on_changed)
         self.model.selection_changed.connect(self._on_selection)
@@ -160,6 +165,7 @@ class MainWindow(QMainWindow):
         self._act(v, "타임라인 축소", lambda: self.timeline.canvas.set_zoom(self.timeline.canvas.pps / 1.3), "Ctrl+-")
         a = self._act(v, "재생 위치 따라가기", lambda c: setattr(self.timeline, "follow", c))
         a.setCheckable(True); a.setChecked(True)
+        self._act(v, "🅰 자막 스타일", self.show_style_tab, "Ctrl+Shift+T")
         self.act_auto = QAction("자동 미리보기 (편집하면 알아서 다시 만들기)", self)
         self.act_auto.setCheckable(True)
         self.act_auto.setChecked(self.auto.enabled)
@@ -245,6 +251,16 @@ class MainWindow(QMainWindow):
             self.model.edit(lambda p: setattr(p.bgm, "start_offset", max(0.0, round(p.bgm.start_offset + d, 3))), "nudge")
 
     # ------------------------------------------------------------------ 상태
+    def show_style_tab(self):
+        self.right.setCurrentWidget(self.style_panel)
+        self.style_panel.sample.replay()
+
+    def _cue_at(self, t: float):
+        c = self.model.cue_timeline.current(t)
+        if not c:
+            return None
+        return c.text, t - c.start, c.end - t, c.end - c.start
+
     def _subtitle_at(self, t: float) -> str:
         c = self.model.cue_timeline.current(t)
         return c.text if c else ""
@@ -356,6 +372,7 @@ class MainWindow(QMainWindow):
         self.player.set_timeline_duration(self.model.timeline.total)
         self.player.set_frame_size(self.model.project.output.width, self.model.project.output.height)
         self.player._placeholder_key = None  # 클립이 바뀌었을 수 있으므로 그림 다시 고르기
+        self.player.set_subtitle_style(self.model.project.subtitle.style, self.model.project.output.height)
         self.player.refresh_overlay()
         if self.preview_is_direct and not self._direct_source():
             self.preview_is_direct = False
