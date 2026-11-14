@@ -1,0 +1,14 @@
+네, 요청하신 영상 구성을 JSON 으로 만들었습니다!
+
+```json
+{
+  "output": {"width": 1080, "height": 1920, "fps": 30},
+  "transition": {"type": "crossfade", "duration": 0.5},
+  "clips": [
+    {"file": "a.png", "type": "image", "duration": 3, "motion": "zoom_in"},
+    {"file": "b.mp4", "type": "video", "speed": 1.5, "mute": true},
+  ]
+}
+```
+
+마음에 드시면 프로그램에 붙여넣어 주세요.

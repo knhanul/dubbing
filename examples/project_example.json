@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "title": "여행 브이로그 예시",
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "fit": "cover",
+    "background": "#000000",
+    "original_volume": 1.0,
+    "file": "output.mp4"
+  },
+  "transition": { "type": "crossfade", "duration": 0.6 },
+  "clips": [
+    { "file": "01_바다.png", "type": "image", "duration": 4.0, "motion": "zoom_in", "motion_strength": 0.15 },
+    { "file": "02_해변산책.mp4", "type": "video", "trim_start": 1.0, "trim_end": 6.0, "speed": 1.0, "mute": true },
+    { "file": "03_노을.jpg", "type": "image", "duration": 3.5, "motion": "pan_right", "motion_strength": 0.2,
+      "transition": { "type": "fade", "duration": 0.8 } },
+    { "file": "04_타임랩스.mp4", "type": "video", "fit_duration": 3.0, "mute": true },
+    { "file": "05_마무리.png", "type": "image", "duration": 4.0, "motion": "ken_burns", "motion_strength": 0.12,
+      "motion_easing": "ease", "transition": { "type": "dissolve", "duration": 1.0 } }
+  ],
+  "subtitle": {
+    "file": "자막.srt",
+    "offset": 0.0,
+    "burn_in": true,
+    "style": { "font": "Malgun Gothic", "size": 52, "color": "#FFFFFF", "outline_color": "#000000",
+               "outline": 2.5, "bold": true, "margin_v": 70 }
+  },
+  "bgm": {
+    "file": "잔잔한음악.mp3",
+    "volume": 0.25,
+    "start_offset": 0.0,
+    "file_start": 0.0,
+    "fade_in": 1.5,
+    "fade_out": 3.0,
+    "loop": true,
+    "duck_under_voice": true,
+    "duck_ratio": 6.0
+  },
+  "dubbing": {
+    "folder": "takes",
+    "volume": 1.0,
+    "latency_ms": 0,
+    "takes": []
+  }
+}

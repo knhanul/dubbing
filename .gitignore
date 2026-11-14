@@ -1,0 +1,22 @@
+# 파이썬
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# 빌드
+build/
+dist/
+*.spec
+
+# 렌더 캐시 / 임시 파일
+.composer_cache/
+*.part.mkv
+*.part.mp4
+*.tmp
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
