@@ -59,8 +59,11 @@ class DubbingPanel(QWidget):
         for _ in range(3):
             mp, ao = QMediaPlayer(self), QAudioOutput(self)
             mp.setAudioOutput(ao)
+            mp._pending_ms = None  # 불러오기가 끝나면 이 위치부터 재생 (Windows: 불러오기 전 위치 옮기기는 무시됨)
+            mp.mediaStatusChanged.connect(lambda st, mp=mp: self._live_loaded(mp))
             self._live_players.append(mp)
         self._live_i = 0
+        self._live_prev: Optional[tuple] = None  # 지난 재생 위치 — None 이면 다음 틱이 '재생 시작'
         self._rec_p0 = 0.0
 
         # --- 큰 자막 표시 ---
@@ -426,37 +429,69 @@ class DubbingPanel(QWidget):
         return est if abs(est - fallback) < 1.0 else fallback
 
     def _live_takes(self, t0: float, t1: float):
-        if not (0 < t1 - t0 < 0.5):
-            return
+        """재생 중 더빙 조각을 함께 틉니다. 조각 시작을 지나갈 때 틀고, 재생을 조각 가운데서 시작하거나
+        위치를 옮기면 그 조각을 해당 위치부터 틉니다."""
+        prev, self._live_prev = self._live_prev, (t1,)
+        jumped = prev is None or not (0 <= t1 - t0 < 0.5)  # 재생 시작 또는 위치 옮김
         stops = getattr(self, "_live_stops", {})
         for mp, end in list(stops.items()):  # 자르기로 나눈 더빙: 구간 끝에서 멈춤
             if t1 >= end:
                 mp.stop()
                 stops.pop(mp, None)
+        if jumped:
+            self.stop_live(keep_prev=True)
+            stops = {}
         for take, pos in zip(self.model.project.dubbing.takes, self.model.take_positions()):
             ts = float(take.trim_start or 0.0)
             begin = pos + ts
-            if t0 < max(begin, 0.001) <= t1:
-                path = self.model.project.resolve(take.file)
-                if path and path.exists():
-                    mp = self._live_players[self._live_i % len(self._live_players)]
-                    self._live_i += 1
-                    mp.setSource(QUrl.fromLocalFile(str(path)))
-                    from ..tracks import audible
-                    gain = 1.0 if audible(self.model.project, "dubbing") else 0.0  # 🔇/S
-                    mp.audioOutput().setVolume(min(1.0, take.volume * self.model.project.dubbing.volume) * gain)
-                    start_in_file = max(ts, -pos)
-                    if start_in_file > 0:
-                        mp.setPosition(int(start_in_file * 1000))
-                    if take.trim_end is not None:
-                        stops[mp] = pos + take.trim_end
-                    else:
-                        stops.pop(mp, None)
-                    mp.play()
+            path = self.model.project.resolve(take.file)
+            if not path or not path.exists():
+                continue
+            if jumped:
+                flen = self.model.take_file_len(take.file)
+                end = pos + (take.trim_end if take.trim_end is not None else flen)
+                if not (begin <= t1 < end - 0.05):
+                    continue
+                start_in_file = t1 - pos  # 조각 가운데부터
+            elif t0 < max(begin, 0.001) <= t1:
+                start_in_file = max(ts, -pos)
+            else:
+                continue
+            mp = self._live_players[self._live_i % len(self._live_players)]
+            self._live_i += 1
+            from ..tracks import audible
+            gain = 1.0 if audible(self.model.project, "dubbing") else 0.0  # 🔇/S
+            mp.audioOutput().setVolume(min(1.0, take.volume * self.model.project.dubbing.volume) * gain)
+            if take.trim_end is not None:
+                stops[mp] = pos + take.trim_end
+            else:
+                stops.pop(mp, None)
+            self._live_start(mp, path, start_in_file)
         self._live_stops = stops
 
-    def stop_live(self):
+    def _live_start(self, mp, path, start_s: float):
+        mp.stop()
+        mp._pending_ms = int(start_s * 1000) if start_s > 0.01 else None
+        mp.setSource(QUrl.fromLocalFile(str(path)))
+        if mp._pending_ms is None:
+            mp.play()
+        else:
+            self._live_loaded(mp)  # 이미 불러왔으면 바로
+
+    def _live_loaded(self, mp):
+        ms = getattr(mp, "_pending_ms", None)
+        if ms is None or mp.mediaStatus() not in (QMediaPlayer.MediaStatus.LoadedMedia,
+                                                  QMediaPlayer.MediaStatus.BufferedMedia):
+            return
+        mp._pending_ms = None
+        mp.setPosition(ms)
+        mp.play()
+
+    def stop_live(self, keep_prev: bool = False):
+        if not keep_prev:
+            self._live_prev = None  # 다음 재생은 '시작'으로 (조각 가운데면 거기부터)
         for mp in self._live_players:
+            mp._pending_ms = None
             mp.stop()
         self.take_player.stop()
 

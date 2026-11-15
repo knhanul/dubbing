@@ -166,6 +166,9 @@ class MainWindow(QMainWindow):
         self.player.position_changed.connect(lambda t: self._sync_bgm())
         self.player.playing_changed.connect(lambda _: self._sync_bgm())
         self.player.on_volume = self._apply_bgm_volume
+        self.bgm_live.building_changed.connect(self._bgm_building)
+        self.bgm_live.failed.connect(self._bgm_failed)
+        self.player.playing_changed.connect(self._bgm_on_play)
         self.model.changed.connect(self._apply_track_audio)
         self._apply_track_audio()
         self.player.btn_refresh.clicked.connect(self.render_preview)
@@ -768,6 +771,26 @@ class MainWindow(QMainWindow):
             return
         self.bgm_live.set_volume(self.player.vol.value() / 100.0 * self.player._base_volume
                                  * (1.0 if audible(self.model.project, "bgm") else 0.0))
+
+    BGM_PREP = "♪ 배경음악 준비 중… (잠시 뒤 함께 들려요)"
+
+    def _bgm_building(self, on: bool):
+        if on and self.player.is_playing():
+            self.statusBar().showMessage(self.BGM_PREP)
+        elif not on and self.statusBar().currentMessage() == self.BGM_PREP:
+            self.statusBar().clearMessage()
+
+    def _bgm_failed(self, err: str):
+        first = (err or "").strip().splitlines()[0] if (err or "").strip() else "알 수 없는 오류"
+        self.statusBar().showMessage(f"⚠ 배경음악을 미리보기에서 틀 준비를 하지 못했어요: {first} "
+                                     "— 재생을 다시 누르면 한 번 더 해 봐요 (내보내기에는 영향 없음)", 12000)
+
+    def _bgm_on_play(self, playing: bool):
+        if not playing:
+            return
+        self.bgm_live.retry_if_failed(self.model.project, self.model.timeline.total)
+        if self.bgm_live.building:
+            self.statusBar().showMessage(self.BGM_PREP)
 
     def _sync_bgm(self):
         self.bgm_live.sync(self.player.position(), self.player.is_playing())
