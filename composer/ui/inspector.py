@@ -466,6 +466,10 @@ class TakePage(_Page):
         self.hint.setText(f"{t.file} · 타임라인 {pos + (t.trim_start or 0):.2f}초부터 — 타임라인에서 끌어 옮기기")
         self.offset.setValue(t.offset)
         self.lbl_pos.setText(f"{pos:.3f} 초")
+        from ..edit_ops import take_overlaps
+        if i in take_overlaps(self.model.project, self.model.take_file_len)[1]:
+            self.hint.setText(self.hint.text() + "\n⚠ 다른 더빙 조각과 겹칩니다 — 겹친 곳은 두 소리가 동시에 들립니다(빨간 빗금). "
+                              "끌어서 놓으면 옆 끝에 붙습니다")
         self.volume.setValue(t.volume)
         self.vol_slider.setValue(t.volume)
         self._loading = False

@@ -134,6 +134,7 @@ class MainWindow(QMainWindow):
         ins.empty.sub_requested.connect(lambda: self.add_subtitle_file())
         self.dub.script_requested.connect(self.open_script_dialog)
         self.timeline.canvas.razor_requested.connect(self._razor)
+        self.timeline.canvas.status_requested.connect(lambda t: self.statusBar().showMessage(t, 6000))
         self.timeline.canvas.add_requested.connect(
             lambda k: self.add_bgm() if k == "bgm" else self.add_subtitle_file())
         self.dub.status.connect(lambda m: self.statusBar().showMessage(m, 6000))
@@ -1428,8 +1429,24 @@ class MainWindow(QMainWindow):
             self.auto.notify_changed()
         self._update_notice()
 
+    def _overlap_ok(self) -> bool:
+        """겹친 더빙 조각이 있으면 한 번 묻기 (계속 = True)."""
+        from ..edit_ops import take_overlaps
+        p = self.model.project
+        if p.tracks.dubbing.muted:
+            return True
+        spans, who = take_overlaps(p, self.model.take_file_len)
+        if not who:
+            return True
+        where = ", ".join(f"{fmt_time(a)}~{fmt_time(b)}" for a, b in spans[:3]) + (" …" if len(spans) > 3 else "")
+        return self.confirm("더빙 조각이 겹칩니다",
+                            f"더빙 조각 {len(who)}개가 겹쳐 있어 그 부분은 두 목소리가 동시에 들립니다.\n"
+                            f"겹친 곳: {where} (타임라인 빨간 빗금)\n\n그래도 내보낼까요?")
+
     def render_final(self):
         if not self._check_renderable():
+            return
+        if not self._overlap_ok():
             return
         default = self.model.project.resolve(self.model.project.output.file or "output.mp4")
         o = self.model.project.output
@@ -1471,6 +1488,8 @@ class MainWindow(QMainWindow):
     def export_voice(self):
         if not self.model.project.dubbing.takes:
             QMessageBox.information(self, "내보내기", "녹음된 테이크가 없습니다.")
+            return
+        if not self._overlap_ok():
             return
         f, _ = QFileDialog.getSaveFileName(self, "목소리만 WAV로 내보내기", str(self.model.project.base_dir / "voice.wav"), "WAV (*.wav)")
         if not f:

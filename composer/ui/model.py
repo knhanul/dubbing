@@ -62,6 +62,15 @@ class ProjectModel(QObject):
     def cue_by_index(self, index: int) -> Optional[Cue]:
         return next((c for c in self.cues if c.index == index), None)
 
+    def take_file_len(self, rel: str) -> float:
+        """더빙 파일 길이(초). 없거나 못 읽으면 1초."""
+        from ..probe import probe
+        p = self.project.resolve(rel)
+        try:
+            return float(probe(p).duration or 1.0) if p and p.exists() else 1.0
+        except Exception:
+            return 1.0
+
     def take_positions(self) -> list[float]:
         by = {c.index: c for c in self.cues}
         return [take_position(t, by, self.project.dubbing.latency_ms) for t in self.project.dubbing.takes]

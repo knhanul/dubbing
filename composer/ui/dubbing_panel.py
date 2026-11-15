@@ -546,7 +546,11 @@ class DubbingPanel(QWidget):
         offset = self._measured_start(base + self.rec_offset) - base
         set_take(self.model.project, idx, self.rec_rel, offset)
         self.model.commit()
-        self.status.emit(f"저장됨: {self.rec_rel} ({length:.1f}초)")
+        msg = f"저장됨: {self.rec_rel} ({length:.1f}초)"
+        from ..edit_ops import take_overlaps
+        if take_overlaps(self.model.project, self.model.take_file_len)[1]:  # 새 녹음은 그 자리 그대로, 겹침만 알림
+            msg += " — ⚠ 다른 더빙 조각과 겹칩니다(타임라인 빨간 빗금). 끌어서 옮기면 옆 끝에 붙습니다"
+        self.status.emit(msg)
         if mode == "line" and self.auto_next.isChecked():
             cues = self.model.cues
             k = next((i for i, c in enumerate(cues) if c.index == idx), None)

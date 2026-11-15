@@ -120,6 +120,75 @@ def split_take(project: Project, k: int, t: float, file_len: Callable[[str], flo
     return True
 
 
+OVERLAP_TOL = 0.005  # 이보다 짧게 닿는 것은 겹침이 아님 (끝에 붙인 것)
+
+
+def take_spans(project: Project, file_len: Callable[[str], float]) -> list[tuple[float, float]]:
+    return [take_span(project, k, file_len) for k in range(len(project.dubbing.takes))]
+
+
+def take_overlaps(project: Project, file_len: Callable[[str], float]) -> tuple[list[tuple[float, float]], set]:
+    """더빙 조각끼리 겹친 구간 [(시작, 끝)] (합쳐서) 과 겹친 조각 번호들 (녹음 지연 보정 전 시각)."""
+    spans = take_spans(project, file_len)
+    raw, who = [], set()
+    for i in range(len(spans)):
+        for j in range(i + 1, len(spans)):
+            a, b = max(spans[i][0], spans[j][0]), min(spans[i][1], spans[j][1])
+            if b - a > OVERLAP_TOL:
+                raw.append((a, b))
+                who.update((i, j))
+    raw.sort()
+    out: list[tuple[float, float]] = []
+    for a, b in raw:
+        if out and a <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out, who
+
+
+def _hits(spans, k, s, e) -> bool:
+    return any(j != k and min(e, b) - max(s, a) > OVERLAP_TOL for j, (a, b) in enumerate(spans))
+
+
+def settle_take(project: Project, k: int, file_len: Callable[[str], float]) -> bool:
+    """k 번째 더빙이 다른 조각과 겹치면, 겹친 조각의 앞 끝/뒤 끝 중 가까운 쪽에 붙여 놓음
+    (그 자리도 다른 조각과 겹치면 다음으로 가까운 끝). 옮겼으면 True."""
+    takes = project.dubbing.takes
+    if not (0 <= k < len(takes)):
+        return False
+    spans = take_spans(project, file_len)
+    s, e = spans[k]
+    if not _hits(spans, k, s, e):
+        return False
+    ln = e - s
+    cands = []
+    for j, (a, b) in enumerate(spans):
+        if j != k:
+            cands += [a - ln, b]
+    best = None
+    for c in sorted(cands, key=lambda c: (abs(c - s), c)):
+        if c >= -1e-6 and not _hits(spans, k, c, c + ln):
+            best = c
+            break
+    if best is None:
+        return False
+    takes[k].offset = round(float(takes[k].offset or 0.0) + (best - s), 4)
+    return True
+
+
+def take_trim_limit(project: Project, k: int, side: str, file_len: Callable[[str], float]) -> Optional[float]:
+    """k 번째 더빙의 왼쪽(side='left') 끝을 늘릴 수 있는 가장 이른 시각 / 오른쪽 끝의 가장 늦은 시각
+    (옆 조각에 닿는 곳). 막는 조각이 없으면 None."""
+    spans = take_spans(project, file_len)
+    s, e = spans[k]
+    if side == "left":
+        ends = [b for j, (a, b) in enumerate(spans) if j != k and b <= s + OVERLAP_TOL]
+        return max(ends) if ends else None
+    starts = [a for j, (a, b) in enumerate(spans) if j != k and a >= e - OVERLAP_TOL]
+    return min(starts) if starts else None
+
+
 # ------------------------------------------------------------------ 구간 잘라내기
 def cut_range(project: Project, rebuild: Callable[[], Timeline], a: float, b: float, all_tracks: bool,
               file_len: Callable[[str], float], skip: Optional[set] = None) -> tuple[float, str]:

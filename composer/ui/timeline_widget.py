@@ -48,6 +48,7 @@ class TimelineCanvas(QWidget):
     zoom_changed = Signal(float)  # 초당 픽셀 (툴바 확대 슬라이더와 맞춤)
     razor_requested = Signal(str, int, float)  # ✂ 자르기 도구로 누른 (종류, 번호, 타임라인 초)
     add_requested = Signal(str)  # 빈 트랙의 '＋ 음악 넣기'(bgm) / '＋ 자막 파일'(subtitle)
+    status_requested = Signal(str)  # 상태 표시줄 안내 (더빙 조각을 옆 끝에 붙였을 때 등)
 
     def __init__(self, model: ProjectModel, parent=None):
         super().__init__(parent)
@@ -227,14 +228,29 @@ class TimelineCanvas(QWidget):
             x += step
         p.restore()
 
-    def _take_len(self, take) -> float:
-        from ..probe import probe
+    def take_overlap_rects(self) -> list[QRectF]:
+        """더빙 조각끼리 겹친 구간 (화면 좌표)."""
+        from ..edit_ops import take_overlaps
+        pr = self.model.project
+        if len(pr.dubbing.takes) < 2:
+            return []
+        lat = pr.dubbing.latency_ms / 1000.0
+        r = self.track_rect("take")
+        return [QRectF(self.x_of(a - lat), r.top() + 1, max(2.0, (b - a) * self.pps), r.height() - 2)
+                for a, b in take_overlaps(pr, self._file_len)[0]]
 
-        p = self.model.project.resolve(take.file)
-        try:
-            return probe(p).duration if p and p.exists() else 1.0
-        except Exception:
-            return 1.0
+    def _paint_take_overlaps(self, p: QPainter) -> None:
+        for rect in self.take_overlap_rects():  # 겹친 곳 = 빨간 빗금 (두 소리가 동시에 들림)
+            p.fillRect(rect, QColor(229, 57, 53, 90))
+            p.fillRect(rect, QBrush(QColor("#ff5252"), Qt.BDiagPattern))
+            p.setPen(QPen(QColor("#ff5252"), 1))
+            p.drawRect(rect)
+
+    def _take_len(self, take) -> float:
+        return self._file_len(take.file)
+
+    def _file_len(self, rel: str) -> float:
+        return self.model.take_file_len(rel)
 
     def hit_test(self, pos: QPointF) -> Optional[Hit]:
         """가장자리(길이 조절)를 몸통보다 먼저 봅니다 — 전환으로 겹친 클립도 앞 클립 끝을 잡을 수 있게.
@@ -254,7 +270,7 @@ class TimelineCanvas(QWidget):
         for kind, idx, rect in items:
             if kind == "transition" or not (rect.top() <= pos.y() <= rect.bottom()):
                 continue
-            if kind in ("clip", "subtitle"):
+            if kind in ("clip", "subtitle", "take"):
                 ew = min(EDGE, max(2.0, rect.width() / 3))  # 아주 짧은 막대는 가운데를 몸통으로 남김
                 if rect.right() - ew <= x <= rect.right() + 3:
                     edges.append((abs(x - rect.right()), Hit(kind, idx, "right")))
@@ -339,6 +355,7 @@ class TimelineCanvas(QWidget):
             p.drawText(rect.adjusted(5, 2, -3, -2), Qt.AlignLeft | Qt.AlignVCenter, text)
             p.restore()
         p.setOpacity(1.0)
+        self._paint_take_overlaps(p)
         self._paint_transitions(p)
         if self._hover is not None:  # 잡을 수 있는 가장자리 강조
             for kind, idx, rect in self._items():
@@ -503,7 +520,11 @@ class TimelineCanvas(QWidget):
             return {"start": it.start, "end": it.end}
         if hit.kind == "take":
             r = next(r for k, i, r in self._items() if k == "take" and i == hit.index)
-            return {"offset": pr.dubbing.takes[hit.index].offset, "span": (self.t_of(r.left()), self.t_of(r.right()))}
+            tk = pr.dubbing.takes[hit.index]
+            return {"offset": tk.offset, "span": (self.t_of(r.left()), self.t_of(r.right())),
+                    "ts": float(tk.trim_start or 0.0),
+                    "te": tk.trim_end if tk.trim_end is not None else self._take_len(tk),
+                    "flen": self._take_len(tk)}
         if hit.kind == "bgm":
             return {"start": pr.bgm.start_offset}
         return {}
@@ -607,12 +628,43 @@ class TimelineCanvas(QWidget):
                 delta = max(dd + delta, -o["start"]) if stuck else snap(dd, fine)
                 it.start, it.end = round(o["start"] + delta, 3), round(o["end"] + delta, 3)
             tip = f"{it.start:.2f} → {it.end:.2f} ({it.end - it.start:.2f}초)"
+        elif k == "take" and d["part"] in ("left", "right"):
+            # 더빙 조각 끝 끌기 = 길이 조절(파일 안 들리는 구간). 옆 조각에 닿으면 멈춤 (Shift = 겹쳐도 됨)
+            from ..edit_ops import take_trim_limit
+            i = d["index"]
+            t = pr.dubbing.takes[i]
+            a0, b0 = o["span"]
+            lim = None if fine else take_trim_limit(pr, i, d["part"], self._file_len)
+            lat = pr.dubbing.latency_ms / 1000.0
+            if d["part"] == "right":
+                end = self.snap_time(b0 + dt, fine, "take", i)[0]
+                te = o["te"] + (end - b0)
+                if lim is not None:
+                    te = min(te, o["te"] + (lim - lat - b0))
+                t.trim_end = round(min(o["flen"], max(o["ts"] + 0.1, te)), 3)
+                if abs(t.trim_end - o["flen"]) < 1e-3:
+                    t.trim_end = None
+            else:
+                st = self.snap_time(a0 + dt, fine, "take", i)[0]
+                ts = o["ts"] + (st - a0)
+                if lim is not None:
+                    ts = max(ts, o["ts"] + (lim - lat - a0))
+                t.trim_start = round(max(0.0, min(o["te"] - 0.1, ts)), 3)
+            te_now = t.trim_end if t.trim_end is not None else o["flen"]
+            tip = f"들리는 길이 {te_now - (t.trim_start or 0.0):.2f}초"
+            if lim is not None and ((d["part"] == "right" and te_now >= o["te"] + (lim - lat - b0) - 1e-3)
+                                    or (d["part"] == "left" and (t.trim_start or 0) <= o["ts"] + (lim - lat - a0) + 1e-3)):
+                tip += "\n옆 조각에 닿음 (Shift = 겹쳐도 됨)"
         elif k == "take":
             t = pr.dubbing.takes[d["index"]]
             a0, b0 = o["span"]
             delta, stuck = self.snap_span(a0 + dt, b0 + dt, fine, "take", d["index"])
             t.offset = round(o["offset"] + dt + delta, 3) if stuck else snap(o["offset"] + dt, fine)
             tip = f"오프셋 {t.offset:+.2f}초"
+            from ..edit_ops import take_overlaps
+            if d["index"] in take_overlaps(pr, self._file_len)[1]:
+                tip += ("\n⚠ 겹쳐 놓기 — 두 소리가 동시에 들립니다" if fine
+                        else "\n놓으면 옆 조각 끝에 붙습니다 (Shift 를 누른 채 놓으면 겹쳐 놓기)")
         elif k == "bgm":
             pr.bgm.start_offset = max(0.0, self.snap_time(o["start"] + dt, fine, "bgm")[0])
             tip = f"시작 {pr.bgm.start_offset:.2f}초"
@@ -672,6 +724,11 @@ class TimelineCanvas(QWidget):
                 clip = pr.clips.pop(src)
                 pr.clips.insert(target, clip)
                 self.model.select("clip", target)
+        if d["kind"] == "take" and d["part"] == "body" and not (ev.modifiers() & Qt.ShiftModifier):
+            from ..edit_ops import settle_take
+            if settle_take(self.model.project, d["index"], self._file_len):
+                self.model.recompute()
+                self.status_requested.emit("더빙 조각이 겹쳐서 옆 조각 끝에 붙였습니다 (Shift 를 누른 채 놓으면 겹쳐 놓기)")
         self.model.commit()
 
     # --- 탐색기 드래그 앤 드롭 ---
