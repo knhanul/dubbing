@@ -1,5 +1,6 @@
-"""● 선택 자막 녹음: 자막 끝에서 저절로 멈추지 않고 직접 끝낼 때까지(R·스페이스·■ 정지), 목소리가 자막보다 길면 자막 끝을 늘림
-(다음 자막 앞까지만, 줄이지는 않음), 끝의 무음은 더빙 조각에서 잘라 냄, 되돌리기 한 번, 자막 트랙 잠금."""
+"""● 선택 자막 녹음: 자막 끝 + 여유에서 자동으로 멈춤. 그때 아직 말하는 중이면 말이 끝날 때까지(무음 0.4초, 최대 5초 더).
+언제든 R·스페이스·■ 정지로 끝내기. 목소리가 자막보다 길면 자막 끝을 늘림(다음 자막 앞까지만, 줄이지는 않음),
+끝의 무음은 더빙 조각에서 잘라 냄, 되돌리기 한 번, 자막 트랙 잠금."""
 import os
 
 import numpy as np
@@ -71,22 +72,106 @@ def test_speech_end_helper(tmp_path):
     assert speech_end(tmp_path / "z.wav") is None
 
 
-def test_no_auto_stop_and_buttons_toggle(win):
+def _speak(w, sec, amp=0.1):
+    cb = w.dub.recorder._callback
+    a = np.full((int(SR * sec), 1), amp, np.float32)
+    cb(a, len(a), None, None)
+
+
+def _start(w, idx=1):
+    w.model.select("subtitle", idx)
+    assert w.handle_key(QKeyEvent(QEvent.KeyPress, Qt.Key_R, Qt.NoModifier))
+    assert w.dub.mode == "line"
+
+
+def test_auto_stop_at_end_plus_tail_when_silent(win):
     w, _ = win
     dub = w.dub
-    assert not hasattr(dub, "postroll") and "끝난 뒤 여유" not in dub.opts.title
-    w.model.select("subtitle", 1)
-    assert w.handle_key(QKeyEvent(QEvent.KeyPress, Qt.Key_R, Qt.NoModifier))
-    assert dub.mode == "line" and dub.btn_rec.text() == "■ 녹음 끝내기 (R)"
-    assert "R·스페이스·■ 정지로 끝내기" in w.statusBar().currentMessage()
-    _feed(w, 0.5, 0.0)
-    dub.on_position(2.6)  # 예전에는 자막 끝 + 여유(2.5초)에서 저절로 멈춤
-    dub.on_position(9.0)
-    assert dub.mode == "line" and dub.recorder.is_recording
-    assert w.handle_key(QKeyEvent(QEvent.KeyPress, Qt.Key_R, Qt.NoModifier))  # R 다시 = 끝내기
-    assert dub.mode is None and dub.btn_rec.text() == "● 선택 자막 녹음 (R)"
+    assert dub.postroll.value() == pytest.approx(0.5) and "끝난 뒤 여유" in dub.opts.title
+    _start(w)
+    assert dub.btn_rec.text() == "■ 녹음 끝내기 (R)"
+    assert "자동으로 멈춰요" in w.statusBar().currentMessage()
+    _feed(w, 0.5, 1.0)  # 1.0초까지 말하고 조용
+    dub.on_position(2.4)
+    assert dub.mode == "line"  # 자막 끝(2.0) + 여유(0.5) 전
+    dub.on_position(2.5)
+    assert dub.mode is None and not dub.extending and dub.btn_rec.text() == "● 선택 자막 녹음 (R)"
     assert len(w.model.project.dubbing.takes) == 1
-    # 버튼 다시 누르기 / 스페이스로도 끝남
+    assert _cue(w, 1).end == pytest.approx(2.0)  # 목소리가 짧으면 자막은 그대로
+    # 여유 시간은 옵션으로
+    dub.postroll.setValue(1.0)
+    _start(w)
+    _feed(w, 0.3, 2.5)
+    dub.on_position(2.6)
+    assert dub.mode == "line"
+    dub.on_position(3.0)
+    assert dub.mode is None
+
+
+def test_keeps_recording_while_voice_then_stops_after_silence(win):
+    w, _ = win
+    dub = w.dub
+    _start(w)
+    _speak(w, 2.0)  # 0.5초부터 → 2.5초까지 계속 말하는 중
+    dub.on_position(2.5)
+    assert dub.mode == "line" and dub.extending
+    assert w.player.view.notice == "● 말이 끝날 때까지 녹음 중…"
+    assert "말이 끝날 때까지" in w.statusBar().currentMessage()
+    _speak(w, 0.5)  # 3.0초까지 말함
+    dub.on_position(3.0)
+    assert dub.mode == "line"
+    _speak(w, 0.3, 0.0)
+    dub.on_position(3.3)
+    assert dub.mode == "line"  # 조용한 지 0.3초 < 0.4초
+    _speak(w, 0.15, 0.0)
+    dub.on_position(3.45)
+    assert dub.mode is None and not dub.extending and "말이 끝날 때까지" not in w.player.view.notice
+    # 목소리가 자막보다 길었으니 자막 끝 = 마지막 말소리(3.0) + 0.2
+    assert _cue(w, 1).end == pytest.approx(3.2, abs=0.03)
+    assert w.model.project.dubbing.takes[0].trim_end == pytest.approx(2.8, abs=0.03)
+    assert "1번 자막 끝을" in w.statusBar().currentMessage()
+    w.model.undo()  # 녹음 + 자막 늘리기 = 한 번
+    assert _cue(w, 1).end == pytest.approx(2.0) and w.model.project.dubbing.takes == []
+
+
+def test_quiet_noise_does_not_extend(win):
+    w, _ = win
+    dub = w.dub
+    _start(w)
+    _speak(w, 2.0, amp=0.003)  # -50dB 정도의 잔잔한 소음 = 말소리 아님
+    dub.on_position(2.5)
+    assert dub.mode is None
+
+
+def test_extension_is_capped(win):
+    w, _ = win
+    dub = w.dub
+    _start(w)
+    _speak(w, 2.0)
+    dub.on_position(2.5)
+    assert dub.extending
+    _speak(w, 4.0)  # 시끄러운 방: 계속 소리
+    dub.on_position(6.9)
+    assert dub.mode == "line"
+    _speak(w, 0.5)
+    dub.on_position(7.0)  # 자막 끝(2.0) + 최대 5초
+    assert dub.mode is None
+    msg = w.statusBar().currentMessage()
+    assert "5초 뒤에 멈췄어요" in msg and "다음 자막과 겹치지 않게" in msg
+    assert _cue(w, 1).end == pytest.approx(3.95, abs=0.01)  # 다음 자막(4.0) 앞까지만
+
+
+def test_manual_stop_anytime(win):
+    w, _ = win
+    dub = w.dub
+    _start(w)
+    _speak(w, 2.0)
+    dub.on_position(2.5)
+    assert dub.extending
+    assert w.handle_key(QKeyEvent(QEvent.KeyPress, Qt.Key_R, Qt.NoModifier))  # 기다리는 중에도 R = 끝내기
+    assert dub.mode is None and not dub.extending and "말이 끝날 때까지" not in w.player.view.notice
+    assert _cue(w, 1).end == pytest.approx(2.7, abs=0.03)
+    # 자막 끝 전에 직접 끝내기: 버튼 / 스페이스 / ■ 정지
     dub.btn_rec.click()
     assert dub.mode == "line"
     _feed(w, 0.3, 0.0)
@@ -96,10 +181,16 @@ def test_no_auto_stop_and_buttons_toggle(win):
     _feed(w, 0.3, 0.0)
     assert w.handle_key(QKeyEvent(QEvent.KeyPress, Qt.Key_Space, Qt.NoModifier))
     assert dub.mode is None
-    # 연속 녹음 버튼도 녹음 중엔 '끝내기'
+    dub.btn_rec.click()
+    _feed(w, 0.3, 0.0)
+    dub.btn_stop.click()
+    assert dub.mode is None
+    # 연속 녹음 버튼도 녹음 중엔 '끝내기', 자막 끝에서 멈추지 않음
     dub.btn_session.click()
     assert dub.btn_session.text() == "■ 연속 녹음 끝내기 (Shift+R)"
     _feed(w, 0.3, 0.0)
+    dub.on_position(9.0)
+    assert dub.mode == "session"
     dub.btn_session.click()
     assert dub.btn_session.text() == "● 여기부터 연속 녹음 (Shift+R)"
 
@@ -146,3 +237,15 @@ def test_subtitle_lock_keeps_cue(win):
     assert _cue(w, 1).end == pytest.approx(2.0)
     assert "잠겨 있어" in w.statusBar().currentMessage()
     assert len(w.model.project.dubbing.takes) == 1
+
+
+def test_level_tap_voice_quiet():
+    from composer.dubbing.levels import LevelTap
+    t = LevelTap(SR)
+    assert t.voice_quiet_seconds > 100  # 아직 말소리 없음
+    t.feed(np.full(SR // 2, 0.1, np.float32))
+    assert t.voice_quiet_seconds < 0.011
+    t.feed(np.zeros(SR // 4, np.float32))
+    assert t.voice_quiet_seconds == pytest.approx(0.25, abs=0.011)
+    t.feed(np.concatenate([np.zeros(SR // 10), np.full(SR // 10, 0.1), np.zeros(SR // 20)]).astype(np.float32))
+    assert t.voice_quiet_seconds == pytest.approx(0.05, abs=0.011)

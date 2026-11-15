@@ -60,6 +60,7 @@ class LevelTap:
             self.hold_db = -90.0       # 천천히 내려오는 최고점 표시
             self.clip_count = 0
             self._quiet_frames = 0
+            self._voice_quiet = 10 ** 9  # 마지막 '말소리'(SPEECH_DB 넘는 10ms) 뒤로 지난 샘플 수
             self._wave.clear()
             self._new = 0
 
@@ -77,6 +78,12 @@ class LevelTap:
         rest = a[n * self.chunk:]
         if rest.size:
             peaks = np.append(peaks, float(np.max(np.abs(rest))))
+        # 10ms 마다 RMS 로 '말소리'인지 (녹음 파일의 speech_end 와 같은 기준) → 마지막 말소리 뒤 무음 길이
+        if n:
+            rms = np.sqrt(np.mean(np.square(a[: n * self.chunk].reshape(n, self.chunk).astype(np.float64)), axis=1))
+            loud = np.nonzero(rms > SPEECH_AMP)[0]
+        else:
+            loud = np.zeros(0, int)
         with self._lock:
             self.rms_db = rms_db
             self.peak_db = peak_db
@@ -85,6 +92,10 @@ class LevelTap:
                 self.clip_count += 1
             if counting:
                 self._quiet_frames = self._quiet_frames + a.size if rms_db < SILENCE_DB else 0
+            if len(loud):
+                self._voice_quiet = a.size - (int(loud[-1]) + 1) * self.chunk
+            else:
+                self._voice_quiet += a.size
             self._wave.extend(float(x) for x in peaks)
             self._new += len(peaks)
 
@@ -92,6 +103,12 @@ class LevelTap:
     def silent_seconds(self) -> float:
         with self._lock:
             return self._quiet_frames / float(self.samplerate)
+
+    @property
+    def voice_quiet_seconds(self) -> float:
+        """마지막 말소리 뒤로 계속 조용했던 시간(초). 막 말하는 중이면 0 에 가까움."""
+        with self._lock:
+            return self._voice_quiet / float(self.samplerate)
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -136,7 +153,8 @@ def file_peaks(path, per_sec: int = 100) -> Optional[np.ndarray]:
     return peaks
 
 
-SPEECH_DB = -42.0  # 이보다 크면 '말소리' (녹음 끝의 무음 찾기)
+SPEECH_DB = -42.0  # 이보다 크면 '말소리' (녹음 끝의 무음 찾기, 선택 자막 녹음이 말 끝을 기다릴 때)
+SPEECH_AMP = 10 ** (SPEECH_DB / 20.0)
 
 
 def speech_end(path: Path, threshold_db: float = SPEECH_DB, window: float = 0.02) -> Optional[float]:
