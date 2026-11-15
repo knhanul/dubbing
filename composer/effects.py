@@ -113,19 +113,6 @@ def fade_filters(total: float, fade_in: float, fade_out: float) -> tuple[list[st
     return v, a
 
 
-def look_preview_graph(looks: list[str], tw: int, th: int) -> tuple[str, list[str]]:
-    """썸네일 한 장에서 룩마다 작은 그림 여러 장을 한 번에 (filter_complex, 출력 라벨들)."""
-    n = len(looks)
-    parts = [f"[0:v]scale={tw}:{th}:force_original_aspect_ratio=increase,crop={tw}:{th},setsar=1,split={n}"
-             + "".join(f"[s{i}]" for i in range(n))]
-    labels = []
-    for i, lk in enumerate(looks):
-        chain = ",".join(LOOK_FILTERS.get(lk, []) or ["null"])
-        parts.append(f"[s{i}]{chain},format=rgb24[o{i}]")
-        labels.append(f"[o{i}]")
-    return ";".join(parts), labels
-
-
 def clamp_value(name: str, v) -> Optional[float]:
     for k, d, lo, hi, _ in ADJUST + MOOD:
         if k == name:

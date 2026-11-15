@@ -1,71 +1,354 @@
 """'✨ 효과' 탭 (프리미어 '효과 컨트롤'처럼): 고른 클립의 색 필터 · 밝기/대비/채도 · 분위기 · 움직임.
 
-* 색 필터는 고른 클립의 한 장면에 필터를 입힌 작은 그림 카드로 보여 줍니다(ffmpeg 한 번, 캐시).
-* 모든 수정은 되돌리기(Ctrl+Z) 가능, 클립 트랙이 잠겨 있으면 막힙니다.
-* 미리보기: 효과를 바꾸면 자동 미리보기(360p)가 1.5초 뒤 다시 만들어져 모든 효과가 보입니다.
+* 맨 위 **합쳐 보기**: 고른 클립의 한 장면에 지금 효과를 모두 입힌 큰 그림 — 내보내기와 같은 ffmpeg 필터
+  (화면 맞춤 + 색 필터 + 밝기·대비·채도 + 흐림·비네팅·노이즈). 값을 바꾸면 0.3초 뒤 백그라운드에서 다시 만듦(캐시).
+* 색 필터 카드도 '이 필터 + 지금 내 다른 조정'으로 보여 줍니다(ffmpeg 한 번, 캐시).
+* 모든 수정은 바로 적용·되돌리기(Ctrl+Z) 가능, 클립 트랙이 잠겨 있으면 막힙니다.
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSettings, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFormLayout, QGridLayout, QHBoxLayout, QLabel, QPushButton,
-                               QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+                               QSizePolicy, QToolButton, QVBoxLayout, QWidget)
 
-from ..effects import ADJUST, DEFAULTS, LOOK_LABELS, LOOKS, MOOD, clear_effects, copy_effects, look_preview_graph
+from ..effects import (ADJUST, DEFAULTS, EFFECT_FIELDS, LOOK_LABELS, LOOKS, MOOD, clear_effects, copy_effects,
+                       effect_filters)
 from ..schema import MOTION_LABELS, MOTIONS
 from .model import ProjectModel
-from .widgets import Collapsible, ValueSlider
+from .widgets import ValueSlider
 
 THUMB_W, THUMB_H = 96, 54
-PREVIEW_NOTE = ("미리보기: 효과를 바꾸면 1.5초 뒤 미리보기 영상이 자동으로 다시 만들어져 모든 효과가 보여요 "
-                "(미리보기를 만들기 전 그림에는 효과가 없어요). 내보내기에는 모두 적용돼요.")
+PREVIEW_MAX_W, PREVIEW_MAX_H = 480, 270
+DEBOUNCE_MS = 300
+PREVIEW_NOTE = ("위 그림은 지금 효과를 모두 합친 모습(내보내기와 같은 필터, 움직임은 빼고 한 장면)이에요. "
+                "타임라인 미리보기 영상도 1.5초 뒤 자동으로 다시 만들어져요.")
 
 
-def look_thumbnails(source: Path, at: float, is_video: bool, cache: Optional[Path] = None) -> dict[str, Path]:
-    """한 장면에 색 필터를 하나씩 입힌 작은 그림들 {룩: png}. ffmpeg 한 번, 같은 파일·시각이면 캐시."""
-    from ..probe import ffmpeg_path, popen_kwargs
-    from ..thumbs import thumb_cache_dir
-    source = Path(source)
+def effect_params(clip) -> dict:
+    """그림 캐시 키에 쓰는 효과 값들(색 필터 + 조정 + 분위기)."""
+    return {k: getattr(clip, k, DEFAULTS[k]) for k in EFFECT_FIELDS}
+
+
+def _phash(d) -> str:
+    return hashlib.sha1(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def _source_key(source: Path, at: float) -> Optional[str]:
     try:
         st = source.stat()
     except OSError:
-        return {}
-    key = f"{source.resolve()}|{st.st_size}|{int(st.st_mtime)}|{at:.2f}|{THUMB_W}x{THUMB_H}|v1"
-    folder = (cache or thumb_cache_dir()) / "looks" / hashlib.sha1(key.encode()).hexdigest()[:16]
+        return None
+    return f"{source.resolve()}|{st.st_size}|{int(st.st_mtime)}|{at:.2f}"
+
+
+def _run_ffmpeg(args: list[str]) -> None:
+    from ..probe import popen_kwargs
+    try:
+        subprocess.run(args, timeout=30, capture_output=True, **popen_kwargs())
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def preview_size(out_w: int, out_h: int) -> tuple[int, int]:
+    """합쳐 보기 그림 크기 — 출력 화면 비율 그대로, 탭 폭·높이 안에 (짝수)."""
+    out_w, out_h = max(2, int(out_w)), max(2, int(out_h))
+    k = min(PREVIEW_MAX_W / out_w, PREVIEW_MAX_H / out_h)
+    return max(2, int(out_w * k) // 2 * 2), max(2, int(out_h * k) // 2 * 2)
+
+
+def effect_preview_path(source: Path, at: float, params: dict, size: tuple[int, int], fit: str, bg: str,
+                        cache: Optional[Path] = None) -> Optional[Path]:
+    from ..thumbs import thumb_cache_dir
+    sk = _source_key(Path(source), at)
+    if sk is None:
+        return None
+    key = _phash({"src": sk, "p": params, "size": list(size), "fit": fit, "bg": bg, "v": 1})
+    return (cache or thumb_cache_dir()) / "fx" / f"{key}.png"
+
+
+def effect_preview(source: Path, at: float, is_video: bool, params: dict, size: tuple[int, int],
+                   fit: str = "cover", bg: str = "#000000", cache: Optional[Path] = None) -> Optional[Path]:
+    """한 장면에 효과를 모두 입힌 그림 한 장 (내보내기와 같은 화면 맞춤 + effect_filters). 같은 값이면 캐시."""
+    from ..probe import ffmpeg_path
+    from ..render.ffmpeg_builder import _fit_filters
+    out = effect_preview_path(source, at, params, size, fit, bg, cache)
+    if out is None:
+        return None
+    if out.exists() and out.stat().st_size > 0:
+        return out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    w, h = size
+    vf = _fit_filters(fit, w, h, bg) + effect_filters(SimpleNamespace(**params), h) + ["format=rgb24"]
+    args = [ffmpeg_path(), "-v", "error", "-y"]
+    if is_video and at > 0:
+        args += ["-ss", f"{at:.3f}"]
+    tmp = out.with_suffix(".tmp.png")
+    args += ["-i", str(source), "-frames:v", "1", "-vf", ",".join(vf), str(tmp)]
+    _run_ffmpeg(args)
+    if tmp.exists() and tmp.stat().st_size > 0:
+        tmp.replace(out)  # 다 만든 뒤에 이름 바꾸기 (반쯤 쓴 파일을 캐시로 읽지 않게)
+        return out
+    return None
+
+
+def look_cards_graph(params: dict, tw: int, th: int) -> tuple[str, list[str]]:
+    """룩마다 '이 색 필터 + 지금 다른 조정(밝기·대비·채도·분위기)'을 입힌 작은 그림 (filter_complex, 출력 라벨)."""
+    n = len(LOOKS)
+    parts = [f"[0:v]scale={tw}:{th}:force_original_aspect_ratio=increase,crop={tw}:{th},setsar=1,split={n}"
+             + "".join(f"[s{i}]" for i in range(n))]
+    labels = []
+    for i, lk in enumerate(LOOKS):
+        chain = ",".join(effect_filters(SimpleNamespace(**{**params, "look": lk}), th) or ["null"])
+        parts.append(f"[s{i}]{chain},format=rgb24[o{i}]")
+        labels.append(f"[o{i}]")
+    return ";".join(parts), labels
+
+
+def _looks_folder(source: Path, at: float, params: Optional[dict], cache: Optional[Path]):
+    """카드 그림 폴더 + 카드에 함께 입힐 '다른 조정' 값 (색 필터만 빼고 모두)."""
+    from ..thumbs import thumb_cache_dir
+    sk = _source_key(Path(source), at)
+    if sk is None:
+        return None, None
+    base = {k: DEFAULTS[k] for k in EFFECT_FIELDS}
+    base.update({k: v for k, v in (params or {}).items() if k in base})
+    base["look"] = "none"
+    key = _phash({"src": sk, "size": [THUMB_W, THUMB_H], "others": base, "v": 2})
+    return (cache or thumb_cache_dir()) / "looks" / key, base
+
+
+def look_thumbs_cached(source: Path, at: float, params: Optional[dict] = None,
+                       cache: Optional[Path] = None) -> Optional[dict]:
+    """이미 만들어 둔 카드 그림이 있으면 바로 {룩: png} (없으면 None) — 화면 스레드에서 깜빡임 없이."""
+    folder, _ = _looks_folder(source, at, params, cache)
+    if folder is None:
+        return None
     outs = {lk: folder / f"{lk}.png" for lk in LOOKS}
-    if all(p.exists() and p.stat().st_size > 0 for p in outs.values()):
-        return outs
+    return outs if all(p.exists() and p.stat().st_size > 0 for p in outs.values()) else None
+
+
+def look_thumbnails(source: Path, at: float, is_video: bool, cache: Optional[Path] = None,
+                    params: Optional[dict] = None) -> dict[str, Path]:
+    """한 장면에 색 필터를 하나씩(+ 지금 다른 조정) 입힌 작은 그림들 {룩: png}. ffmpeg 한 번, 같은 값이면 캐시."""
+    from ..probe import ffmpeg_path
+    hit = look_thumbs_cached(source, at, params, cache)
+    if hit:
+        return hit
+    folder, base = _looks_folder(source, at, params, cache)
+    if folder is None:
+        return {}
     folder.mkdir(parents=True, exist_ok=True)
-    graph, labels = look_preview_graph(LOOKS, THUMB_W, THUMB_H)
+    outs = {lk: folder / f"{lk}.png" for lk in LOOKS}
+    graph, labels = look_cards_graph(base, THUMB_W, THUMB_H)
     args = [ffmpeg_path(), "-v", "error", "-y"]
     if is_video and at > 0:
         args += ["-ss", f"{at:.3f}"]
     args += ["-i", str(source), "-filter_complex", graph]
     for lk, lab in zip(LOOKS, labels):
         args += ["-map", lab, "-frames:v", "1", str(outs[lk])]
-    try:
-        subprocess.run(args, timeout=30, capture_output=True, **popen_kwargs())
-    except Exception:  # noqa: BLE001
-        return {}
+    _run_ffmpeg(args)
     return {lk: p for lk, p in outs.items() if p.exists() and p.stat().st_size > 0}
 
 
+class PreviewLabel(QLabel):
+    """합쳐 보기 그림: 탭 폭에 맞춰 비율 그대로 줄여 보여 줌 (키우지는 않음)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pm = QPixmap()
+        self.setAlignment(Qt.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+
+    def set_image(self, pm: QPixmap):
+        self._pm = pm
+        self._fit()
+
+    def has_image(self) -> bool:
+        return not self._pm.isNull()
+
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        self._fit()
+
+    def _fit(self):
+        if self._pm.isNull():
+            self.setPixmap(QPixmap())
+            self.setFixedHeight(60)
+            return
+        w = max(40, min(self.width() - 4, self._pm.width()))
+        pm = self._pm if w >= self._pm.width() else self._pm.scaledToWidth(w, Qt.SmoothTransformation)
+        self.setFixedHeight(pm.height() + 4)
+        self.setPixmap(pm)
+
+
+class _Fmt:
+    """ValueSlider 의 값 글자를 함수로 (밝기 0.1 → '+10')."""
+
+    def __init__(self, fn):
+        self.fn = fn
+
+    def format(self, v):  # noqa: A003
+        return self.fn(v)
+
+
+def show_value(name: str, v: float) -> str:
+    """사람이 읽기 쉬운 값: 밝기·대비·채도는 기본 0 기준 ±(×100), 분위기·움직임 강도는 0~100."""
+    v = float(v)
+    if name == "brightness":
+        return f"{v * 100:+.0f}"
+    if name in ("contrast", "saturation"):
+        return f"{(v - 1) * 100:+.0f}"
+    return f"{v * 100:.0f}"
+
+
+class FxCard(QFrame):
+    """둥근 테두리 카드: 머리(▾ 제목 · 바뀐 값 점 · 접혔을 때 요약)를 누르면 접기/펼치기(상태 기억).
+    안은 '이름 | 슬라이더 | 값 | ↺' 한 줄짜리 촘촘한 줄."""
+
+    ROW_H = 22
+    LABEL_W = 72
+
+    def __init__(self, title: str, key: str, default_open: bool = True, parent=None):
+        super().__init__(parent)
+        self.title, self.key, self.summary, self.dirty = title, key, "", False
+        self._settings = QSettings("knhanul", "VideoComposer")
+        self.setObjectName("fxCard")
+        self.setStyleSheet("QFrame#fxCard{border:1px solid #474b55;border-radius:7px;background:#25282f}")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.head = QToolButton()
+        self.head.setCheckable(True)
+        self.head.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.head.setFixedHeight(28)
+        self.head.setStyleSheet("QToolButton{border:none;border-radius:7px;background:transparent}"
+                                "QToolButton:hover{background:#2f333b}")
+        hl = QHBoxLayout(self.head)
+        hl.setContentsMargins(10, 0, 10, 0)
+        hl.setSpacing(6)
+        self.lbl_title = QLabel()
+        self.lbl_title.setStyleSheet("font-weight:bold;color:#e8eaed;background:transparent")
+        self.dot = QLabel("●")
+        self.dot.setStyleSheet("color:#ffd54f;font-size:9px;background:transparent")
+        self.dot.setToolTip("기본값에서 바꾼 값이 있어요")
+        self.lbl_sum = QLabel()
+        self.lbl_sum.setStyleSheet("color:#9aa0a6;font-size:11px;background:transparent")
+        self.lbl_sum.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        for wdg in (self.lbl_title, self.dot, self.lbl_sum):
+            wdg.setAttribute(Qt.WA_TransparentForMouseEvents)
+        hl.addWidget(self.lbl_title)
+        hl.addWidget(self.dot)
+        hl.addStretch(1)
+        hl.addWidget(self.lbl_sum)
+        self.dot.hide()
+        self.body = QWidget()
+        self.body.setStyleSheet("background:transparent")
+        self.grid = QGridLayout(self.body)
+        self.grid.setContentsMargins(10, 0, 8, 6)
+        self.grid.setHorizontalSpacing(6)
+        self.grid.setVerticalSpacing(2)
+        self.grid.setColumnStretch(1, 1)
+        lay.addWidget(self.head)
+        lay.addWidget(self.body)
+        v = self._settings.value(f"ui/fold/{key}", None)
+        on = default_open if v is None else str(v).lower() in ("true", "1")
+        self.head.toggled.connect(self.set_open)
+        self.set_open(on, remember=False)
+
+    def set_open(self, on: bool, remember: bool = True):
+        self.head.blockSignals(True)
+        self.head.setChecked(on)
+        self.head.blockSignals(False)
+        self.body.setVisible(on)
+        self._update_head()
+        if remember:
+            self._settings.setValue(f"ui/fold/{self.key}", bool(on))
+
+    def is_open(self) -> bool:
+        return self.head.isChecked()
+
+    def _update_head(self):
+        on = self.is_open()
+        self.lbl_title.setText(("▾ " if on else "▸ ") + self.title)
+        self.lbl_sum.setText("" if on else self.summary)
+        self.dot.setVisible(self.dirty)
+        self.head.setToolTip(f"{self.title} — {self.summary}" if self.summary else self.title)
+
+    def set_summary(self, text: str, dirty: Optional[bool] = None):
+        self.summary = text or ""
+        if dirty is not None:
+            self.dirty = bool(dirty)
+        self._update_head()
+
+    def header_text(self) -> str:
+        """머리에 보이는 글 (테스트·접근성)."""
+        t = self.lbl_title.text()
+        return t + (f" — {self.lbl_sum.text()}" if self.lbl_sum.text() else "")
+
+    def add_widget_row(self, widget):
+        self.grid.addWidget(widget, self.grid.rowCount(), 0, 1, 4)
+
+    def add_row(self, label: str, widget, value: Optional[QLabel] = None, reset: Optional[QToolButton] = None):
+        r = self.grid.rowCount()
+        lab = QLabel(label)
+        lab.setStyleSheet("color:#c8ccd2;background:transparent")
+        lab.setFixedHeight(self.ROW_H)
+        lab.setFixedWidth(self.LABEL_W)  # 카드끼리 슬라이더 줄 맞춤
+        self.grid.addWidget(lab, r, 0)
+        if value is None and reset is None:
+            self.grid.addWidget(widget, r, 1, 1, 3)
+            return
+        self.grid.addWidget(widget, r, 1)
+        if value is not None:
+            self.grid.addWidget(value, r, 2)
+        if reset is not None:
+            self.grid.addWidget(reset, r, 3)
+
+    def add_slider_row(self, label: str, vs: ValueSlider, reset: Optional[QToolButton] = None):
+        """ValueSlider 를 '슬라이더 | 값' 두 칸으로 나눠 줄 맞춤."""
+        vs.layout().removeWidget(vs.label)
+        vs.label.setParent(None)
+        vs.label.setMinimumWidth(32)
+        vs.label.setStyleSheet("color:#e8eaed;background:transparent")
+        vs.slider.setFixedHeight(self.ROW_H)
+        self.add_row(label, vs, vs.label, reset)
+
+
+def _reset_button(tip: str) -> QToolButton:
+    rb = QToolButton()
+    rb.setText("↺")
+    rb.setToolTip(tip)
+    rb.setFixedSize(22, 20)
+    rb.setStyleSheet("QToolButton{border:1px solid #474b55;border-radius:4px;background:#30333b;color:#e8eaed}"
+                     "QToolButton:disabled{color:#5f6368;border-color:#3a3d45}")
+    return rb
+
+
 class EffectsPanel(QWidget):
-    thumbs_ready = Signal(str, object)  # (그림 키, {룩: 경로}) — 일하는 스레드에서 화면 쪽으로
+    rendered = Signal(str, str, object)  # (종류 'preview'|'thumbs', 키, 결과) — 일하는 스레드에서 화면 쪽으로
 
     def __init__(self, model: ProjectModel, parent=None):
         super().__init__(parent)
         self.model = model
         self._loading = False
-        self.sync_thumbs = False  # 테스트: 그림 카드를 바로(같은 스레드에서) 만들기
-        self._thumb_key = None
+        self.sync_thumbs = False  # 테스트: 그림을 바로(같은 스레드에서, 기다림 없이) 만들기
+        self._want = {"preview": None, "thumbs": None}  # 지금 보여 줘야 할 그림 키
+        self._job = None  # 0.3초 뒤 만들 일 (preview_args, thumbs_args)
         self.thumb_paths: dict[str, Path] = {}
+        self.preview_path: Optional[Path] = None
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(DEBOUNCE_MS)
+        self._debounce.timeout.connect(self._launch)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
         self.head = QLabel()
@@ -85,11 +368,22 @@ class EffectsPanel(QWidget):
         bl.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.body)
 
-        # --- 색 필터 카드 ---
-        lab = QLabel("색 필터")
-        lab.setStyleSheet("font-weight:bold;")
-        bl.addWidget(lab)
-        grid = QGridLayout()
+        # --- 합쳐 보기 (지금 효과를 모두 입힌 큰 그림) ---
+        self.preview = PreviewLabel()
+        self.preview.setStyleSheet("background:#111318;border:1px solid #474b55;border-radius:4px;color:#9aa0a6;")
+        self.preview.setToolTip("고른 클립의 한 장면에 지금 효과(색 필터 · 밝기·대비·채도 · 분위기)를 모두 입힌 모습 — "
+                                "내보내기와 같은 필터 (움직임은 빼고)")
+        self.busy = QLabel("만드는 중…", self.preview)
+        self.busy.setStyleSheet("background:rgba(0,0,0,170);color:#ffd54f;padding:2px 6px;border-radius:3px;font-size:11px;")
+        self.busy.hide()
+        bl.addWidget(self.preview)
+
+        # --- 카드 4개: 색 필터 / 밝기·대비·채도 / 분위기 / 움직임 (머리를 누르면 접기·펼치기, 상태 기억) ---
+        self.sec_look = FxCard("색 필터", key="fx_look")
+        cards = QWidget()
+        cards.setStyleSheet("background:transparent")
+        grid = QGridLayout(cards)
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(4)
         self.look_group = QButtonGroup(self)
         self.look_group.setExclusive(True)
@@ -98,61 +392,55 @@ class EffectsPanel(QWidget):
             b = QToolButton()
             b.setCheckable(True)
             b.setText(LOOK_LABELS[lk])
-            b.setToolTip(f"색 필터: {LOOK_LABELS[lk]}")
+            b.setToolTip(f"색 필터: {LOOK_LABELS[lk]} (그림 = 이 필터 + 지금 다른 조정)")
             b.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
             b.setIconSize(QSize(THUMB_W, THUMB_H))
-            b.setMinimumSize(THUMB_W + 10, 40)
-            b.setStyleSheet("QToolButton{border:1px solid #474b55;border-radius:4px;padding:2px}"
-                            "QToolButton:checked{border:2px solid #ffd54f;background:#3a3d45}")
+            b.setMinimumSize(THUMB_W + 8, 34)
+            b.setStyleSheet("QToolButton{border:1px solid #474b55;border-radius:5px;padding:1px;font-size:11px;"
+                            "background:#2b2e36}QToolButton:checked{border:2px solid #ffd54f;background:#3a3d45}")
             self.look_group.addButton(b)
             self.look_cards[lk] = b
             grid.addWidget(b, i // 4, i % 4)
             b.clicked.connect(lambda _=False, v=lk: self._edit("look", lambda c, v=v: setattr(c, "look", v), None))
-        bl.addLayout(grid)
+        self.sec_look.add_widget_row(cards)
 
-        # --- 밝기·대비·채도 / 분위기 ---
         self.sliders: dict[str, ValueSlider] = {}
         self.resets: dict[str, QToolButton] = {}
-        self.sec_adjust = Collapsible("밝기 · 대비 · 채도", key="fx_adjust", default_open=True)
-        self.sec_mood = Collapsible("분위기 — 비네팅 · 흐림 · 필름 노이즈", key="fx_mood", default_open=True)
+        self.sec_adjust = FxCard("밝기 · 대비 · 채도", key="fx_adjust")
+        self.sec_mood = FxCard("분위기", key="fx_mood")
         for sec, rows in ((self.sec_adjust, ADJUST), (self.sec_mood, MOOD)):
             for name, d, lo, hi, label in rows:
-                vs = ValueSlider(lo, hi, 0.01, "{:+.2f}" if name == "brightness" else "{:.2f}")
-                rb = QToolButton()
-                rb.setText("↺")
-                rb.setToolTip(f"{label} 기본값으로 ({d:g})")
-                row = QHBoxLayout()
-                row.setContentsMargins(0, 0, 0, 0)
-                row.addWidget(vs, 1)
-                row.addWidget(rb)
-                wrap = QWidget()
-                wrap.setLayout(row)
-                sec.addRow(label, wrap)
+                vs = ValueSlider(lo, hi, 0.01, _Fmt(lambda v, n=name: show_value(n, v)))
+                rb = _reset_button(f"{label} 기본값으로")
+                sec.add_slider_row(label, vs, rb)
                 self.sliders[name] = vs
                 self.resets[name] = rb
                 vs.valueChanged.connect(lambda v, n=name: self._edit(n, lambda c, n=n, v=v: setattr(c, n, round(v, 3)), "fx_" + n))
                 rb.clicked.connect(lambda _=False, n=name, d=d: self._edit(n, lambda c, n=n, d=d: setattr(c, n, d), None))
-            bl.addWidget(sec)
 
-        # --- 움직임 (🛠 속성에서 옮겨 옴, 영상에도) ---
-        self.sec_motion = Collapsible("움직임 — 확대 · 이동 (이미지·영상)", key="fx_motion", default_open=True)
+        self.sec_motion = FxCard("움직임", key="fx_motion")
+        self.sec_motion.setToolTip("확대 · 이동 (이미지·영상 모두)")
         self.motion = QComboBox()
         for m in MOTIONS:
             self.motion.addItem(MOTION_LABELS[m], m)
-        self.strength_slider = ValueSlider(0, 1, 0.01, "{:.2f}")
+        self.strength_slider = ValueSlider(0, 1, 0.01, _Fmt(lambda v: show_value("motion_strength", v)))
         self.easing = QComboBox()
         self.easing.addItem("부드럽게(가속/감속)", "ease")
         self.easing.addItem("일정한 속도", "linear")
-        self.sec_motion.addRow("움직임", self.motion)
-        self.sec_motion.addRow("움직임 강도", self.strength_slider)
-        self.sec_motion.addRow("속도감", self.easing)
-        bl.addWidget(self.sec_motion)
+        for cb in (self.motion, self.easing):
+            cb.setFixedHeight(24)
+        self.sec_motion.add_row("종류", self.motion)
+        self.sec_motion.add_slider_row("강도", self.strength_slider)
+        self.sec_motion.add_row("속도감", self.easing)
         self.motion.currentIndexChanged.connect(
             lambda _: self._edit("motion", lambda c: setattr(c, "motion", self.motion.currentData()), None))
         self.strength_slider.valueChanged.connect(
             lambda v: self._edit("motion_strength", lambda c: setattr(c, "motion_strength", round(v, 3)), "fx_str"))
         self.easing.currentIndexChanged.connect(
             lambda _: self._edit("motion_easing", lambda c: setattr(c, "motion_easing", self.easing.currentData()), None))
+        bl.setSpacing(6)
+        for card in (self.sec_look, self.sec_adjust, self.sec_mood, self.sec_motion):
+            bl.addWidget(card)
 
         self.note = QLabel(PREVIEW_NOTE)
         self.note.setWordWrap(True)
@@ -170,7 +458,7 @@ class EffectsPanel(QWidget):
         self.btn_clear.clicked.connect(self.clear)
         lay.addStretch(1)
 
-        self.thumbs_ready.connect(self._on_thumbs)
+        self.rendered.connect(self._on_rendered)
         model.selection_changed.connect(self.refresh)
         model.changed.connect(self.refresh)
         self.refresh()
@@ -228,6 +516,9 @@ class EffectsPanel(QWidget):
         if c is None:
             self.head.setText("✨ 효과")
             self.lock_banner.hide()
+            self._debounce.stop()
+            self._job = None
+            self._want = {"preview": None, "thumbs": None}
             return
         self._loading = True
         lk = self.locked()
@@ -247,8 +538,21 @@ class EffectsPanel(QWidget):
         self.easing.setCurrentIndex(max(0, self.easing.findData(c.motion_easing)))
         self.easing.setEnabled(c.motion != "none")
         self.btn_all.setEnabled(len(self.model.project.clips) > 1)
+        self._update_summaries(c)
         self._loading = False
-        self._request_thumbs(c)
+        self._request_images(c)
+
+    def _update_summaries(self, c):
+        """카드 머리: 접혔을 때 요약, 기본값에서 바뀐 값이 있으면 노란 점."""
+        look = c.look or "none"
+        self.sec_look.set_summary(LOOK_LABELS.get(look, look), look != "none")
+        for card, rows, empty in ((self.sec_adjust, ADJUST, "기본"), (self.sec_mood, MOOD, "없음")):
+            parts = [f"{label} {show_value(name, getattr(c, name))}" for name, d, _lo, _hi, label in rows
+                     if abs(float(getattr(c, name)) - d) > 1e-4]
+            card.set_summary(" · ".join(parts) or empty, bool(parts))
+        moving = c.motion != "none" and c.motion_strength > 0
+        self.sec_motion.set_summary(f"{MOTION_LABELS.get(c.motion, c.motion)} · 강도 {show_value('s', c.motion_strength)}"
+                                    if moving else "없음", moving)
 
     def _thumb_source(self, c) -> tuple[Optional[Path], float]:
         path = self.model.project.resolve(c.file)
@@ -261,32 +565,104 @@ class EffectsPanel(QWidget):
         at = (tm.source_in + min(1.0, (tm.source_out - tm.source_in) / 2)) if tm else 0.0
         return path, max(0.0, at)
 
-    def _request_thumbs(self, c):
+    def preview_spec(self, c):
+        """합쳐 보기 그림을 만들 값 (원본, 시각, 영상?, 효과 값, 크기, 화면 맞춤, 여백 색)."""
         path, at = self._thumb_source(c)
         if path is None:
-            self._set_icons({})
-            return
-        key = f"{path}|{at:.2f}"
-        if key == self._thumb_key:
-            return
-        self._thumb_key = key
-        self._set_icons({})  # 만드는 동안은 글자 카드
-        is_video = c.type == "video"
-        if self.sync_thumbs:
-            self._on_thumbs(key, look_thumbnails(path, at, is_video))
-            return
-        def work():
-            res = look_thumbnails(path, at, is_video)
-            try:
-                self.thumbs_ready.emit(key, res)
-            except RuntimeError:  # 그 사이 창이 닫힘
-                pass
-        threading.Thread(target=work, daemon=True).start()
+            return None
+        out = self.model.project.output
+        return (path, at, c.type == "video", effect_params(c), preview_size(out.width, out.height),
+                c.fit or out.fit, out.background)
 
-    def _on_thumbs(self, key: str, paths):
-        if key != self._thumb_key:
-            return  # 그 사이 다른 클립을 골랐음
-        self._set_icons(paths or {})
+    def _request_images(self, c):
+        spec = self.preview_spec(c)
+        if spec is None:
+            self._set_preview(None)
+            self._set_icons({})
+            self._want = {"preview": None, "thumbs": None}
+            return
+        path, at, is_video, params, size, fit, bg = spec
+        pkey = str(effect_preview_path(path, at, params, size, fit, bg))
+        tfolder, _ = _looks_folder(path, at, params, None)
+        tkey = str(tfolder)
+        need_p = need_t = False
+        if pkey != self._want["preview"]:
+            self._want["preview"] = pkey
+            if Path(pkey).exists() and Path(pkey).stat().st_size > 0:
+                self._set_preview(Path(pkey))  # 캐시에 있으면 바로
+            else:
+                need_p = True
+        if tkey != self._want["thumbs"]:
+            self._want["thumbs"] = tkey
+            hit = look_thumbs_cached(path, at, params)
+            if hit:
+                self._set_icons(hit)
+            else:
+                need_t = True
+        if not (need_p or need_t):
+            if self._job is None:
+                self.busy.hide()
+            return
+        job_p = (pkey, (path, at, is_video, params, size, fit, bg)) if need_p else (self._job or {}).get("p")
+        job_t = (tkey, (path, at, is_video, params)) if need_t else (self._job or {}).get("t")
+        self._job = {"p": job_p, "t": job_t}
+        if need_p:
+            self._show_busy()
+        if self.sync_thumbs:
+            self._launch()
+        else:
+            self._debounce.start()  # 끄는 동안은 0.3초마다 다시 미룸
+
+    def _show_busy(self):
+        self.busy.adjustSize()
+        self.busy.move(max(0, self.preview.width() - self.busy.width() - 6), 6)
+        self.busy.show()
+        self.busy.raise_()
+
+    def flush(self):
+        """기다리지 않고 지금 만들기 (테스트)."""
+        if self._debounce.isActive():
+            self._debounce.stop()
+            self._launch()
+
+    def _launch(self):
+        job, self._job = self._job, None
+        if not job:
+            return
+
+        def work():
+            if job.get("p"):
+                key, (path, at, is_video, params, size, fit, bg) = job["p"]
+                self._emit("preview", key, effect_preview(path, at, is_video, params, size, fit, bg))
+            if job.get("t"):
+                key, (path, at, is_video, params) = job["t"]
+                self._emit("thumbs", key, look_thumbnails(path, at, is_video, params=params))
+        if self.sync_thumbs:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True).start()
+
+    def _emit(self, kind, key, res):
+        try:
+            self.rendered.emit(kind, key, res)
+        except RuntimeError:  # 그 사이 창이 닫힘
+            pass
+
+    def _on_rendered(self, kind: str, key: str, res):
+        if key != self._want.get(kind):
+            return  # 그 사이 값이 또 바뀜 (새 그림을 기다리는 중)
+        if kind == "preview":
+            self._set_preview(res)
+            if self._job is None or not self._job.get("p"):
+                self.busy.hide()
+        else:
+            self._set_icons(res or {})
+
+    def _set_preview(self, path: Optional[Path]):
+        self.preview_path = Path(path) if path else None
+        pm = QPixmap(str(path)) if path else QPixmap()
+        self.preview.setText("" if not pm.isNull() or self.clip is None else "그림을 만들 수 없어요 (파일을 찾을 수 없음)")
+        self.preview.set_image(pm)
 
     def _set_icons(self, paths: dict):
         self.thumb_paths = dict(paths)

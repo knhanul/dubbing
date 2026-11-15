@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication
 
 from composer.edit_ops import split_clip
 from composer.effects import (DEFAULTS, LOOKS, clear_effects, copy_effects, effect_filters, fade_filters,
-                              has_effects, look_preview_graph)
+                              has_effects)
 from composer.probe import ffmpeg_path, probe
 from composer.render.ffmpeg_builder import RenderSettings, build_assembly, build_clip_job, clip_cache_key
 from composer.schema import Clip, Project
@@ -141,11 +141,6 @@ def test_old_project_loads_with_defaults_and_validate():
     p2 = Project.from_dict({"clips": [{"file": "a.png", "look": "warm", "vignette": 0.4}], "output": {"fade_out": 1.5}})
     p3 = Project.from_dict(p2.to_dict())
     assert (p3.clips[0].look, p3.clips[0].vignette, p3.output.fade_out) == ("warm", 0.4, 1.5)
-
-
-def test_look_preview_graph_labels():
-    g, labels = look_preview_graph(LOOKS, 96, 54)
-    assert labels == [f"[o{i}]" for i in range(len(LOOKS))] and f"split={len(LOOKS)}" in g
 
 
 # --- 실제 ffmpeg -------------------------------------------------------
@@ -336,3 +331,129 @@ def test_output_fade_sliders(win):
     assert (w.model.project.output.fade_in, w.model.project.output.fade_out) == (pytest.approx(1.0), pytest.approx(2.0))
     w.model.undo()
     assert w.model.project.output.fade_out == 0 and w.model.project.output.fade_in == pytest.approx(1.0)
+
+
+# --- 합쳐 보기 · 카드 그림 · 카드 접기 (v2) -------------------------------
+def _img_mean(path):
+    from PySide6.QtGui import QImage
+    im = QImage(str(path))
+    assert not im.isNull()
+    rs = gs = bs = 0
+    n = 0
+    for y in range(0, im.height(), 6):
+        for x in range(0, im.width(), 6):
+            c = im.pixelColor(x, y)
+            rs += c.red(); gs += c.green(); bs += c.blue(); n += 1
+    return rs / n, gs / n, bs / n
+
+
+@need_ffmpeg
+def test_effect_preview_combines_all_and_caches(tmp_path):
+    from media_fixtures import make_image
+    from composer.ui.effects_panel import effect_params, effect_preview, preview_size
+    src = make_image(tmp_path / "x.png", color="orange")
+    size = preview_size(1920, 1080)
+    assert size == (480, 270) and preview_size(1080, 1920)[1] == 270
+    base = effect_params(Clip(file="x.png", type="image"))
+    p0 = effect_preview(src, 0, False, base, size, cache=tmp_path / "c")
+    r, g, b = _img_mean(p0)
+    assert r > b + 100  # 주황 그대로
+    bw = {**base, "look": "bw", "brightness": 0.2}
+    p1 = effect_preview(src, 0, False, bw, size, cache=tmp_path / "c")
+    assert p1 != p0
+    r1, g1, b1 = _img_mean(p1)
+    assert abs(r1 - b1) < 8 and abs(r1 - g1) < 8  # 흑백
+    m = p1.stat().st_mtime_ns
+    assert effect_preview(src, 0, False, dict(bw), size, cache=tmp_path / "c") == p1 and p1.stat().st_mtime_ns == m  # 캐시
+    # 비네팅: 가장자리가 가운데보다 어두움
+    from PySide6.QtGui import QImage
+    pv = effect_preview(src, 0, False, {**base, "vignette": 1.0}, size, cache=tmp_path / "c")
+    im = QImage(str(pv))
+    assert im.pixelColor(2, 2).red() + 40 < im.pixelColor(240, 135).red()
+
+
+@need_ffmpeg
+def test_look_cards_include_other_adjustments(tmp_path):
+    from media_fixtures import make_image
+    from composer.ui.effects_panel import look_cards_graph, look_thumbnails
+    g, _ = look_cards_graph({**DEFAULTS, "brightness": 0.3, "vignette": 0.5}, 96, 54)
+    assert g.count("eq=brightness=0.3") == len(LOOKS) and g.count("vignette=") == len(LOOKS)
+    src = make_image(tmp_path / "x.png", color="gray")
+    plain = look_thumbnails(src, 0, False, cache=tmp_path / "c", params=dict(DEFAULTS))
+    bright = look_thumbnails(src, 0, False, cache=tmp_path / "c", params={**DEFAULTS, "look": "sepia", "brightness": 0.3})
+    assert plain["none"].parent != bright["none"].parent  # 다른 조정이 바뀌면 다른 캐시
+    assert _img_mean(bright["none"])[1] > _img_mean(plain["none"])[1] + 30
+    # 색 필터만 바꾸면 카드 그림은 그대로 (캐시 재사용)
+    again = look_thumbnails(src, 0, False, cache=tmp_path / "c", params={**DEFAULTS, "look": "bw", "brightness": 0.3})
+    assert again == bright
+
+
+@need_ffmpeg
+def test_panel_preview_updates_sync(win):
+    w, _ = win
+    fx = w.effects
+    w.model.select("clip", 0)
+    assert fx.preview_path is not None and fx.preview.has_image()
+    first = fx.preview_path
+    _slide(fx.sliders["contrast"], 1.5)
+    assert fx.preview_path != first and fx.preview_path.exists()
+    w.model.undo()
+    assert fx.preview_path == first  # 같은 값이면 캐시 그림 그대로
+
+
+@need_ffmpeg
+def test_panel_preview_debounced_in_background(win, monkeypatch):
+    import time
+    import composer.ui.effects_panel as ep
+    w, _ = win
+    fx = w.effects
+    w.model.select("clip", 1)
+    fx.sync_thumbs = False
+    calls = []
+    real = ep.effect_preview
+    monkeypatch.setattr(ep, "effect_preview", lambda *a, **k: (calls.append(a[3]), real(*a, **k))[1])
+    for v in (0.31, 0.32, 0.33):  # 빠르게 여러 번 → 0.3초 뒤 한 번만
+        _slide(fx.sliders["grain"], v)
+    assert fx._debounce.isActive() and fx._debounce.interval() == 300
+    assert fx.busy.isVisibleTo(fx) and fx.busy.text() == "만드는 중…"
+    assert w.model.project.clips[1].grain == pytest.approx(0.33)  # 값은 바로 적용 (그림만 기다림)
+    t0 = time.time()
+    while fx.busy.isVisibleTo(fx) and time.time() - t0 < 15:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert not fx.busy.isVisibleTo(fx)
+    assert len(calls) == 1 and calls[0]["grain"] == pytest.approx(0.33)
+    assert fx.preview_path is not None and fx.preview_path.exists()
+    t0 = time.time()
+    while set(fx.thumb_paths) != set(LOOKS) and time.time() - t0 < 15:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert set(fx.thumb_paths) == set(LOOKS)
+
+
+def test_cards_fold_with_summary_and_dot(win):
+    w, _ = win
+    fx = w.effects
+    w.model.select("clip", 0)
+    cards = (fx.sec_look, fx.sec_adjust, fx.sec_mood, fx.sec_motion)
+    assert all(c.is_open() for c in cards) and not any(c.dirty for c in cards[:3])
+    fx.look_cards["vintage"].click()
+    _slide(fx.sliders["brightness"], 0.1)
+    _slide(fx.sliders["saturation"], 0.95)
+    _slide(fx.sliders["vignette"], 0.3)
+    for c in cards:
+        c.head.click()
+    assert all(not c.is_open() and c.body.isHidden() for c in cards)
+    assert fx.sec_look.header_text() == "▸ 색 필터 — 빈티지"
+    assert fx.sec_adjust.header_text() == "▸ 밝기 · 대비 · 채도 — 밝기 +10 · 채도 -5"
+    assert fx.sec_mood.header_text() == "▸ 분위기 — 비네팅 30"
+    assert fx.sec_look.dot.isVisibleTo(fx) and fx.sec_adjust.dot.isVisibleTo(fx) and fx.sec_mood.dot.isVisibleTo(fx)
+    assert QSettings("knhanul", "VideoComposer").value("ui/fold/fx_look") in (False, "false")
+    from composer.ui.effects_panel import FxCard
+    assert not FxCard("x", key="fx_look").is_open()  # 새로 만들어도 접힘 기억
+    fx.sec_look.head.click()
+    assert fx.sec_look.header_text() == "▾ 색 필터"  # 펼치면 요약 없음
+    fx.btn_clear.click()
+    assert not fx.sec_adjust.dot.isVisibleTo(fx) and fx.sec_adjust.summary == "기본"
+    # 값 글자도 같은 모양
+    assert fx.sliders["brightness"].label.text() == "+0" and fx.sliders["vignette"].label.text() == "0"

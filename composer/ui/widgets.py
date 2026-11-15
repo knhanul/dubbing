@@ -59,6 +59,7 @@ class Collapsible(QWidget):
 
         super().__init__(parent)
         self.title = title
+        self.summary = ""  # 접혀 있을 때 제목 뒤에 붙는 짧은 요약 ('색 필터 — 빈티지')
         self.key = key
         self._settings = QSettings("knhanul", "VideoComposer") if key else None
         self.head = QToolButton()
@@ -94,11 +95,20 @@ class Collapsible(QWidget):
         self.head.blockSignals(True)
         self.head.setChecked(on)
         self.head.blockSignals(False)
-        self.head.setText(("▾ " if on else "▸ ") + self.title)
+        self._update_head()
         self.body.setVisible(on)
         if remember and self._settings is not None:
             self._settings.setValue(f"ui/fold/{self.key}", bool(on))
         self.toggled.emit(on)
+
+    def _update_head(self):
+        on = self.head.isChecked()
+        extra = f" — {self.summary}" if self.summary and not on else ""
+        self.head.setText(("▾ " if on else "▸ ") + self.title + extra)
+
+    def set_summary(self, text: str):
+        self.summary = text or ""
+        self._update_head()
 
     def is_open(self) -> bool:
         return self.head.isChecked()
