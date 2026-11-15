@@ -123,6 +123,8 @@ class MainWindow(QMainWindow):
         ins = self.inspector
         ins.take_page.play_requested.connect(self.dub.play_take)
         ins.take_page.rerecord_requested.connect(self.rerecord_take)
+        ins.take_page.play_file_requested.connect(self.dub.play_file)
+        ins.take_page.delete_file_requested.connect(self.delete_take_file)
         ins.sub_file_panel.remove_subtitles_requested.connect(self.remove_all_subtitles)
         ins.bgm_page.remove_requested.connect(self.remove_bgm)
         ins.bgm_page.pick_requested.connect(lambda: self.add_bgm())
@@ -577,6 +579,29 @@ class MainWindow(QMainWindow):
         if not self.inspector.sub_file_panel.pick_sub(f):
             return False
         self.statusBar().showMessage(f"📝 자막 {len(self.model.cues)}줄을 불러왔습니다 (Ctrl+Z 로 되돌리기)", 6000)
+        return True
+
+    def delete_take_file(self, rel: str) -> bool:
+        """녹음 기록의 🗑: 지금 어느 조각도 쓰지 않는 녹음 파일만, 확인 후 지움(파일 삭제는 되돌릴 수 없음)."""
+        p = self.model.project
+        if self._locked_msg("take"):
+            return False
+        norm = rel.replace("\\", "/").lower()
+        if any(t.file.replace("\\", "/").lower() == norm for t in p.dubbing.takes):
+            self.statusBar().showMessage("지금 쓰는 녹음은 지울 수 없습니다 — 다른 녹음을 '이걸로 쓰기' 한 뒤 지우세요", 6000)
+            return False
+        path = p.resolve(rel)
+        if not path or not path.exists():
+            return False
+        if not self.confirm("녹음 파일 삭제", f"{Path(rel).name} 파일을 지울까요?\n지운 파일은 되돌릴 수 없습니다(Ctrl+Z 로도 안 됨)."):
+            return False
+        try:
+            path.unlink()
+        except OSError as e:
+            self.statusBar().showMessage(f"지울 수 없습니다: {e}", 6000)
+            return False
+        self.model.commit()  # 바뀐 내용은 없지만 녹음 기록·녹음 탭 목록을 새로
+        self.statusBar().showMessage(f"🗑 {Path(rel).name} 을(를) 지웠습니다", 5000)
         return True
 
     def show_image_defaults(self):

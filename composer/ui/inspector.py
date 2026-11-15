@@ -421,6 +421,8 @@ class SubtitlePage(_Page):
 class TakePage(_Page):
     play_requested = Signal(int, bool)  # take index, 영상과 함께
     rerecord_requested = Signal(int)
+    play_file_requested = Signal(str)  # 녹음 기록의 ▶ 듣기 (파일 경로, 프로젝트 기준)
+    delete_file_requested = Signal(str)  # 녹음 기록의 🗑 파일 삭제 (확인은 메인 창에서)
 
     def __init__(self, model):
         super().__init__(model)
@@ -442,6 +444,13 @@ class TakePage(_Page):
         self.num.addRow("타임라인 위치", self.lbl_pos)
         self.num.addRow("볼륨", self.volume)
         self.btn_del = self.button("🗑 테이크 삭제 (Delete)", self._delete)
+        # 녹음 기록: 같은 자막을 다시 녹음한 예전 파일들 (v1, v2 …) — 듣기 · 이걸로 쓰기 · 파일 삭제
+        self.history = QGroupBox("🎞 녹음 기록")
+        self.history_lay = QVBoxLayout(self.history)
+        self.history_lay.setContentsMargins(6, 4, 6, 6)
+        self.history_lay.setSpacing(3)
+        self.history_rows: list[dict] = []
+        self.outer.insertWidget(self.outer.indexOf(self.num), self.history)
         self.offset.valueChanged.connect(lambda v: self._set("off", lambda p: setattr(self.take, "offset", v)))
         self.volume.valueChanged.connect(lambda v: self._set("tvol", lambda p: setattr(self.take, "volume", v)))
         self.vol_slider.valueChanged.connect(lambda v: self._set("tvol", lambda p: setattr(self.take, "volume", v)))
@@ -472,7 +481,61 @@ class TakePage(_Page):
                               "끌어서 놓으면 옆 끝에 붙습니다")
         self.volume.setValue(t.volume)
         self.vol_slider.setValue(t.volume)
+        self._fill_history(t)
         self._loading = False
+
+    def _fill_history(self, take):
+        import time
+        from ..dubbing.takes import take_versions
+        while self.history_lay.count():
+            it = self.history_lay.takeAt(0)
+            if it.widget() is not None:
+                it.widget().deleteLater()
+        self.history_rows = []
+        vers = take_versions(self.model.project, take)
+        self.history.setTitle(f"🎞 녹음 기록 ({len(vers)}개)" if vers else "🎞 녹음 기록")
+        if not vers:
+            lab = QLabel("녹음 파일을 찾을 수 없습니다.")
+            lab.setStyleSheet("color:#9aa0a6;")
+            self.history_lay.addWidget(lab)
+            return
+        for v in vers:
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(0, 0, 0, 0)
+            name = f"v{v.version}" if v.version else Path(v.rel).name
+            when = time.strftime("%m-%d %H:%M", time.localtime(v.mtime)) if v.mtime else "-"
+            lab = QLabel(f"{'✔ ' if v.current else '　 '}{name} · {when} · {v.length:.1f}초" + ("  (지금 사용)" if v.current else ""))
+            lab.setToolTip(v.rel)
+            if v.current:
+                lab.setStyleSheet("color:#3fa36b;font-weight:bold;")
+            b_play = QPushButton("▶")
+            b_play.setToolTip("이 녹음 듣기")
+            b_play.setFixedWidth(34)
+            b_use = QPushButton("이걸로 쓰기")
+            b_use.setToolTip("이 조각이 이 녹음을 쓰게 합니다 — 위치·볼륨·자르기 구간은 그대로 (Ctrl+Z 로 되돌리기)")
+            b_use.setEnabled(not v.current)
+            b_del = QPushButton("🗑")
+            b_del.setToolTip("지금 쓰는 녹음은 지울 수 없습니다" if v.current else "이 녹음 파일을 지웁니다 (확인 후, 되돌릴 수 없음)")
+            b_del.setFixedWidth(34)
+            b_del.setEnabled(not v.current)
+            b_play.clicked.connect(lambda _=False, r=v.rel: self.play_file_requested.emit(r))
+            b_use.clicked.connect(lambda _=False, vv=v: self.use_version(vv))
+            b_del.clicked.connect(lambda _=False, r=v.rel: self.delete_file_requested.emit(r))
+            h.addWidget(lab, 1)
+            for b in (b_play, b_use, b_del):
+                h.addWidget(b)
+            self.history_lay.addWidget(row)
+            self.history_rows.append({"version": v, "label": lab, "play": b_play, "use": b_use, "delete": b_del})
+
+    def use_version(self, v) -> bool:
+        from ..dubbing.takes import use_version
+        i = self.model.selection.index
+        takes = self.model.project.dubbing.takes
+        if not (0 <= i < len(takes)) or self.model.project.tracks.dubbing.locked:
+            return False
+        self.model.edit(lambda p: use_version(p.dubbing.takes[i], v.rel, v.length))
+        return True
 
     def _delete(self):
         i = self.model.selection.index

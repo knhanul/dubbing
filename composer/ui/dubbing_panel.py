@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import statistics
 import time
+from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
@@ -16,7 +17,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleS
 from ..dubbing.levels import SILENCE_WARN_S, SILENCE_WARNING
 from ..dubbing.recorder import Recorder, RecorderUnavailable, list_input_devices
 from .level_widgets import MicStrip
-from ..dubbing.takes import find_take, next_take_path, set_take
+from ..dubbing.takes import count_versions, find_take, next_take_path, set_take
 from .model import ProjectModel
 from .preview import PreviewPlayer, fmt_time
 
@@ -131,6 +132,7 @@ class DubbingPanel(QWidget):
         # --- 자막 목록 ---
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["번호", "시작", "끝", "길이", "내용", "녹음"])
+        self.table.horizontalHeaderItem(5).setToolTip("✔ = 녹음 있음 · N개 = 다시 녹음한 기록 수 (더빙 조각을 고르면 🛠 속성 ▸ 녹음 기록에서 고르기)")
         self.table.verticalHeader().hide()
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -286,8 +288,9 @@ class DubbingPanel(QWidget):
         self.table.setRowCount(len(cues))
         for r, c in enumerate(cues):
             take = find_take(self.model.project, c.index)
+            n = count_versions(self.model.project, c.index) if take else 0
             vals = [str(c.index), fmt_time(c.start), fmt_time(c.end), f"{c.duration:.2f}", c.text.replace("\n", " / "),
-                    "✔" if take else ""]
+                    ("✔" + (f" {n}개" if n > 1 else "")) if take else ""]
             for col, v in enumerate(vals):
                 it = self.table.item(r, col)
                 if it is None:
@@ -583,6 +586,19 @@ class DubbingPanel(QWidget):
             self.take_player.setPosition(int(max(float(take.trim_start or 0.0), -pos) * 1000))
             self.player.play()
         self.take_player.play()
+
+    def play_file(self, rel: str) -> bool:
+        """녹음 기록의 ▶ 듣기: 파일 하나만 처음부터."""
+        path = self.model.project.resolve(rel)
+        if not path or not path.exists():
+            self.status.emit(f"파일이 없습니다: {rel}")
+            return False
+        self.stop_live()
+        self.take_player.setSource(QUrl.fromLocalFile(str(path)))
+        self.take_audio.setVolume(1.0)
+        self.take_player.play()
+        self.status.emit(f"▶ {Path(rel).name} 듣는 중")
+        return True
 
     def play_selected(self, with_video: bool):
         if self.model.selection.kind == "take":

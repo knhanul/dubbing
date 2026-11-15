@@ -44,3 +44,90 @@ def set_take(project: Project, subtitle_index: Optional[int], rel_file: str, off
 
 def remove_take(project: Project, take: Take) -> None:
     project.dubbing.takes = [t for t in project.dubbing.takes if t is not take]
+
+
+# ------------------------------------------------------------------ 녹음 기록 (같은 자막의 예전 녹음들)
+import re as _re
+from dataclasses import dataclass as _dataclass
+
+_LINE_RE = _re.compile(r"^line_(\d{4})_v(\d+)\.wav$", _re.IGNORECASE)
+
+
+@_dataclass
+class TakeVersion:
+    rel: str  # 프로젝트 기준 경로 (takes/line_0003_v2.wav)
+    path: Path
+    version: int  # v 번호 (자유·세션 녹음 등은 0)
+    mtime: float  # 녹음(파일) 시각
+    length: float  # 초
+    current: bool  # 지금 이 조각이 쓰는 파일
+
+
+def _audio_len(path: Path) -> float:
+    try:
+        import soundfile as sf
+        info = sf.info(str(path))
+        return float(info.frames) / float(info.samplerate or 1)
+    except Exception:  # noqa: BLE001
+        try:
+            from ..probe import probe
+            return float(probe(path).duration or 0.0)
+        except Exception:  # noqa: BLE001
+            return 0.0
+
+
+def _rel_join(rel_dir: str, name: str) -> str:
+    rel_dir = rel_dir.replace("\\", "/").rstrip("/")
+    return f"{rel_dir}/{name}" if rel_dir and rel_dir != "." else name
+
+
+def take_versions(project: Project, take: Take) -> list[TakeVersion]:
+    """이 더빙 조각의 녹음 기록. 자막 줄 녹음(line_XXXX_vN.wav)이면 같은 폴더의 같은 번호 파일 모두(v 순),
+    자유·세션 녹음이나 불러온 파일이면 그 파일 하나만."""
+    cur_rel = take.file.replace("\\", "/")
+    cur_path = project.resolve(take.file)
+    name = Path(cur_rel).name
+    rel_dir = str(Path(cur_rel).parent).replace("\\", "/")
+    m = _LINE_RE.match(name)
+    files: list[tuple[int, str, Path]] = []
+    if m and cur_path is not None and cur_path.parent.is_dir():
+        num = m.group(1)
+        for f in cur_path.parent.iterdir():
+            mm = _LINE_RE.match(f.name)
+            if mm and mm.group(1) == num and f.is_file():
+                files.append((int(mm.group(2)), _rel_join(rel_dir, f.name), f))
+        files.sort(key=lambda x: x[0])
+    elif cur_path is not None and cur_path.exists():
+        files = [(0, cur_rel, cur_path)]
+    out = []
+    for v, rel, path in files:
+        try:
+            mt = path.stat().st_mtime
+        except OSError:
+            mt = 0.0
+        out.append(TakeVersion(rel, path, v, mt, _audio_len(path), path.name.lower() == name.lower()))
+    return out
+
+
+def count_versions(project: Project, subtitle_index: int) -> int:
+    """자막 줄 번호로 녹음 파일 개수 (녹음 탭 목록 표시용). 지금 쓰는 조각의 파일 번호를 우선 사용."""
+    tk = find_take(project, subtitle_index)
+    if tk is not None:
+        return len(take_versions(project, tk))
+    folder = project.resolve(project.dubbing.folder or "takes")
+    if folder is None or not folder.is_dir():
+        return 0
+    num = f"{subtitle_index:04d}"
+    return sum(1 for f in folder.iterdir() if (m := _LINE_RE.match(f.name)) and m.group(1) == num)
+
+
+def use_version(take: Take, rel: str, length: float) -> None:
+    """이 조각이 다른 녹음 파일을 쓰게 — 위치·볼륨은 그대로, 자르기 구간은 새 파일 길이 안에서 유지."""
+    take.file = rel
+    ts = float(take.trim_start or 0.0)
+    if length > 0:
+        if ts >= length - 0.05:
+            ts = 0.0
+        take.trim_start = round(ts, 4) if ts > 0 else 0.0
+        if take.trim_end is not None and (take.trim_end > length - 1e-3 or take.trim_end <= ts + 0.05):
+            take.trim_end = None
