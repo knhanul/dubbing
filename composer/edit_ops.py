@@ -34,15 +34,16 @@ def split_clip(project: Project, timeline: Timeline, i: int, t: float) -> bool:
             c.fit_duration, c2.fit_duration = round(u, 4), round(rest, 4)
         else:
             c.duration, c2.duration = round(u, 4), round(rest, 4)
-        a, b = c.motion_from, c.motion_to
-        mid = round(a + (b - a) * u / tm.duration, 5)
-        c.motion_to, c2.motion_from = mid, mid
     else:
         s = round(tm.source_in + u * tm.speed, 4)  # 원본에서 자르는 곳 (속도 반영)
         c.trim_end, c2.trim_start = s, s
         # 뒤 조각의 끝(trim_end)은 원래 그대로(None 이면 파일 끝까지)
         if c.fit_duration:
             c.fit_duration, c2.fit_duration = round(u, 4), round(rest, 4)
+    # 움직임 경로를 나눠 이어지게 (이미지·영상 모두). 효과(색·밝기·분위기)는 deepcopy 로 그대로 복사됨
+    a, b = c.motion_from, c.motion_to
+    mid = round(a + (b - a) * u / tm.duration, 5)
+    c.motion_to, c2.motion_from = mid, mid
     project.clips.insert(i + 1, c2)
     return True
 

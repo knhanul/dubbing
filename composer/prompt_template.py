@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .subtitle_style import APPEAR_LABELS, POSITION_LABELS
-from .schema import MOTIONS, TRANSITIONS, guess_type
+from .schema import LOOK_LABELS, MOTIONS, TRANSITIONS, guess_type
 
 
 @dataclass
@@ -84,9 +84,12 @@ RULES = f"""규칙:
 3. 시간 단위는 모두 초(소수점 가능)이다.
 4. clips 는 영상에 나올 순서대로 나열한다.
    - type: "image" 또는 "video"
-   - 이미지: duration(표시 시간) 필수. motion 으로 움직임을 준다.
+   - 이미지: duration(표시 시간) 필수. motion 으로 움직임을 준다(영상 클립에도 쓸 수 있음).
      motion 값: {", ".join(MOTIONS)}
      motion_strength: 0~1 (0.1~0.25 권장, 클수록 많이 움직임)
+   - 효과(생략하면 원본 그대로, 꼭 필요할 때만): look(색 필터) 값: {", ".join(f'"{k}"({v})' for k, v in LOOK_LABELS.items())},
+     brightness(-0.5~0.5, 0 = 그대로), contrast(0.5~2, 1 = 그대로), saturation(0~3, 1 = 그대로),
+     vignette(0~1, 가장자리 어둡게), blur(0~1, 흐림), grain(0~1, 필름 노이즈)
    - 영상: trim_start/trim_end 로 구간 자르기, speed(0.1~16)로 속도 조절,
      fit_duration 을 주면 그 길이에 맞게 속도를 자동 계산한다(speed 무시).
      mute: true 면 원본 소리 제거, volume 은 원본 소리 크기(1.0 = 그대로).
@@ -95,6 +98,7 @@ RULES = f"""규칙:
      전환은 두 클립의 경계 가운데에 걸쳐지고 클립들은 맞닿아 이어지므로 **전체 길이 = 클립 길이(duration)의 합** 이다
      (전환이 길이를 줄이지 않는다). "version": 2 로 쓴다.
 5. output: width/height 는 짝수, fps 는 24/30/60 중 하나 권장. fit 은 "cover"(꽉 채움) 또는 "contain"(여백).
+   output.fade_in / output.fade_out: 영상 시작/끝을 검은 화면에서·으로 서서히(초, 소리도 함께, 생략하면 0).
 6. subtitle.file 에는 .srt 파일, bgm.file 에는 음악 파일을 넣는다. 없으면 해당 항목을 생략한다.
 7. subtitle.style (자막 모양, 생략 가능 — 영상 분위기에 맞게 골라도 됨):
    - font: Windows 글꼴 이름 (한글이 되는 글꼴: "Malgun Gothic", "Nanum Gothic", "NanumMyeongjo", "Gulim" 등)

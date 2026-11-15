@@ -109,13 +109,13 @@ def _pct(v: float) -> str:
 
 
 class ClipPage(_Page):
+    effects_requested = Signal()  # '✨ 효과 탭에서 바꾸기'
+
     def __init__(self, model):
-        super().__init__(model, advanced="고급 — 이름표 · 움직임 속도감")
+        super().__init__(model, advanced="고급 — 이름표")
         self.lbl_file = self.head
         self.lbl_info = self.hint
         # --- 기본 (슬라이더·선택) ---
-        self.motion = self.combo([(m, MOTION_LABELS[m]) for m in MOTIONS])
-        self.strength_slider = ValueSlider(0, 1, 0.01, "{:.2f}")
         self.speed_preset = QComboBox()
         for v in SPEEDS:
             self.speed_preset.addItem(f"{v:g}×", v)
@@ -124,8 +124,6 @@ class ClipPage(_Page):
         self.vol_slider = ValueSlider(0, 2, 0.05, "{:.0%}")
         self.fit = self.combo([(None, "출력 설정 따름"), ("cover", "꽉 채우기(잘라냄)"), ("contain", "전체 보이기(여백)")])
         f = self.form
-        f.addRow("움직임", self.motion)
-        f.addRow("움직임 강도", self.strength_slider)
         f.addRow("재생 속도", self.speed_preset)
         snd = QHBoxLayout(); snd.addWidget(self.mute); snd.addWidget(self.vol_slider, 1)
         self._snd = QWidget(); self._snd.setLayout(snd); snd.setContentsMargins(0, 0, 0, 0)
@@ -140,7 +138,6 @@ class ClipPage(_Page):
         self.chk_trim_end = QCheckBox("끝 자르기")
         self.trim_end = NudgeSpin(0.1, 36000)
         self.volume = self.dspin(0, 4, 0.05, 2, " 배")
-        self.strength = self.dspin(0, 1, 0.01, 3)
         n = self.num
         n.addRow("표시 시간", self.duration)
         n.addRow(self.chk_fit, self.fit_duration)
@@ -148,13 +145,17 @@ class ClipPage(_Page):
         n.addRow("시작 자르기", self.trim_start)
         n.addRow(self.chk_trim_end, self.trim_end)
         n.addRow("원본 소리 크기", self.volume)
-        n.addRow("움직임 강도", self.strength)
         # --- ▸ 고급 ---
         self.ed_label = QLineEdit()
         self.ed_label.setPlaceholderText("타임라인에 보일 이름 (비우면 파일 이름)")
-        self.easing = self.combo([("ease", "부드럽게(가속/감속)"), ("linear", "일정한 속도")])
         self.adv.addRow("이름표", self.ed_label)
-        self.adv.addRow("움직임 속도감", self.easing)
+        self.lbl_fx = QLabel()  # 움직임·색 효과는 ✨ 효과 탭으로 옮김 — 지금 값만 한 줄로
+        self.lbl_fx.setWordWrap(True)
+        self.lbl_fx.setStyleSheet(DIM)
+        self.btn_fx = QPushButton("✨ 효과 탭에서 바꾸기 (움직임 · 색 · 분위기)")
+        self.btn_fx.clicked.connect(lambda: self.effects_requested.emit())
+        f.addRow("효과", self.lbl_fx)
+        f.addRow("", self.btn_fx)
         self.btn_dup = self.button("⧉ 복제", self._dup, "바로 뒤에 같은 클립을 하나 더")
         self.btn_del = self.button("🗑 삭제 (Delete)", self._delete, "지우면 뒤 클립이 당겨 붙습니다")
 
@@ -171,12 +172,6 @@ class ClipPage(_Page):
         self.mute.toggled.connect(lambda v: self._set("mute", lambda p: setattr(c(), "mute", v)))
         self.volume.valueChanged.connect(lambda v: self._set("vol", lambda p: setattr(c(), "volume", v)))
         self.vol_slider.valueChanged.connect(lambda v: self._set("vol", lambda p: setattr(c(), "volume", v)))
-        self.motion.currentIndexChanged.connect(
-            lambda _: self._set("motion", lambda p: setattr(c(), "motion", self.motion.currentData())))
-        self.strength.valueChanged.connect(lambda v: self._set("str", lambda p: setattr(c(), "motion_strength", v)))
-        self.strength_slider.valueChanged.connect(lambda v: self._set("str", lambda p: setattr(c(), "motion_strength", v)))
-        self.easing.currentIndexChanged.connect(
-            lambda _: self._set("ease", lambda p: setattr(c(), "motion_easing", self.easing.currentData())))
         self.fit.currentIndexChanged.connect(lambda _: self._set("fit", lambda p: setattr(c(), "fit", self.fit.currentData())))
 
     @property
@@ -201,12 +196,9 @@ class ClipPage(_Page):
         self.hint.setText(extra + f"시작 {tm.start:.2f}초 — 길이·자르기는 타임라인에서 클립 끝을 끌어 조절, "
                                   f"정확한 숫자는 아래 '{NUM_TITLE}'")
         f, n = self.form, self.num.form
-        for w in (self.motion, self.strength_slider):
-            f.setRowVisible(w, img)
         for w in (self.speed_preset, self._snd):
             f.setRowVisible(w, not img)
         n.setRowVisible(self.duration, img)
-        n.setRowVisible(self.strength, img)
         for w in (self.speed, self.trim_start, self.trim_end, self.volume):
             n.setRowVisible(w, not img)
         self.ed_label.setText(c.label)
@@ -232,11 +224,13 @@ class ClipPage(_Page):
         self.volume.setValue(c.volume)
         self.vol_slider.setValue(c.volume)
         self.vol_slider.setEnabled(not img and not c.mute)
-        self.set_combo(self.motion, c.motion)
-        self.strength.setValue(c.motion_strength)
-        self.strength_slider.setValue(c.motion_strength)
-        self.strength_slider.setEnabled(c.motion != "none")
-        self.set_combo(self.easing, c.motion_easing)
+        from ..effects import LOOK_LABELS, has_effects
+        parts = [MOTION_LABELS.get(c.motion, c.motion) if c.motion != "none" and c.motion_strength > 0 else "움직임 없음"]
+        if c.look != "none":
+            parts.append(LOOK_LABELS.get(c.look, c.look))
+        if has_effects(c) and c.look == "none":
+            parts.append("조정 있음")
+        self.lbl_fx.setText(("✨ " if has_effects(c) else "") + " · ".join(parts))
         self.set_combo(self.fit, c.fit)
         self._loading = False
 
@@ -791,6 +785,18 @@ class OutputPage(QWidget):
         fs.addWidget(self.soft)
         lay.addWidget(g_sub)
 
+        g_fade = self.g_fade = QGroupBox("영상 시작 · 끝 페이드 (검은 화면, 소리도 함께)")
+        ff = QFormLayout(g_fade)
+        self.fade_in = ValueSlider(0, 5, 0.1, "{:.1f}초")
+        self.fade_out = ValueSlider(0, 5, 0.1, "{:.1f}초")
+        self.fade_in.setToolTip("0 = 페이드 없음. 영상이 검은 화면에서 서서히 나타나고 소리도 서서히 커집니다")
+        self.fade_out.setToolTip("0 = 페이드 없음. 영상 끝에서 검은 화면으로 서서히 사라지고 소리도 줄어듭니다")
+        ff.addRow("시작 페이드 인", self.fade_in)
+        ff.addRow("끝 페이드 아웃", self.fade_out)
+        lay.addWidget(g_fade)
+        self.fade_in.valueChanged.connect(lambda v: self._set("fin", lambda p: setattr(p.output, "fade_in", round(v, 2))))
+        self.fade_out.valueChanged.connect(lambda v: self._set("fout", lambda p: setattr(p.output, "fade_out", round(v, 2))))
+
         self.adv = Collapsible("고급 — 크기 직접 · fps · 여백 색 · 볼륨 · 오프셋 · 녹음 보정", key="out_adv")
         self.w = QSpinBox(); self.w.setRange(16, 7680); self.w.setSingleStep(2)
         self.h = QSpinBox(); self.h.setRange(16, 4320); self.h.setSingleStep(2)
@@ -887,6 +893,8 @@ class OutputPage(QWidget):
         self.fit.setCurrentIndex(max(0, self.fit.findData(o.fit)))
         self._swatch(self.bg, o.background)
         self.orig_vol.setValue(o.original_volume)
+        self.fade_in.setValue(o.fade_in)
+        self.fade_out.setValue(o.fade_out)
         self.tr_type.setCurrentIndex(max(0, self.tr_type.findData(p.transition.type)))
         self.tr_dur.setValue(p.transition.duration)
         self.btn_tr_all.setEnabled(len(p.clips) > 1 and not p.tracks.clips.locked)

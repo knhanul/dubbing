@@ -88,14 +88,20 @@ class MainWindow(QMainWindow):
         sl.addWidget(self.style_panel, 1)
         self.sub_scroll = scroll(self.sub_tab)
         self.output_scroll = scroll(self.inspector.output_page)
+        from .effects_panel import EffectsPanel
+        self.effects = EffectsPanel(self.model)
+        self.effects_scroll = scroll(self.effects)
         self.right.addTab(self.inspector, "🛠 속성")
+        self.right.addTab(self.effects_scroll, "✨ 효과")
         self.right.addTab(self.dub_scroll, "🎤 녹음")
         self.right.addTab(self.sub_scroll, "🅰 자막")
         self.right.addTab(self.output_scroll, "📤 출력")
         self.right.setTabToolTip(0, "타임라인에서 고른 클립·전환·자막·더빙·배경음악의 설정")
-        self.right.setTabToolTip(1, "마이크 녹음 — 자막 따라 녹음 / 자유 녹음(대본 먼저) · 녹음으로 자막 만들기")
-        self.right.setTabToolTip(2, "자막 파일 불러오기·저장 · 자막 모양(스타일)")
-        self.right.setTabToolTip(3, "영상 크기 · 기본 전환 · 자막 넣는 방식 · 내보내기")
+        self.right.setTabToolTip(1, "고른 클립의 색 필터 · 밝기·대비·채도 · 분위기(비네팅·흐림·노이즈) · 움직임")
+        self.right.setTabToolTip(2, "마이크 녹음 — 자막 따라 녹음 / 자유 녹음(대본 먼저) · 녹음으로 자막 만들기")
+        self.right.setTabToolTip(3, "자막 파일 불러오기·저장 · 자막 모양(스타일)")
+        self.right.setTabToolTip(4, "영상 크기 · 기본 전환 · 자막 넣는 방식 · 시작/끝 페이드 · 내보내기")
+        self.inspector.clip_page.effects_requested.connect(lambda: self.right.setCurrentWidget(self.effects_scroll))
         self.inspector.style_requested.connect(self.show_style_tab)
         self.right.currentChanged.connect(
             lambda i: self.dub.ensure_devices() if self.right.widget(i) is self.dub_scroll else None)
@@ -986,7 +992,10 @@ class MainWindow(QMainWindow):
         s = self.model.selection
         # 고르면 🛠 속성 탭으로. 단 녹음 탭에서 자막·더빙을 고를 때는 녹음 흐름을 지키려고 그대로
         recording_tab = self.right.currentWidget() is self.dub_scroll
-        if s.kind in ("clip", "transition", "bgm") or (s.kind in ("subtitle", "take") and not recording_tab):
+        effects_tab = self.right.currentWidget() is self.effects_scroll
+        if s.kind == "clip" and effects_tab:
+            pass  # ✨ 효과 탭에서 다른 클립을 고르면 효과 탭 그대로 (그 클립 효과로)
+        elif s.kind in ("clip", "transition", "bgm") or (s.kind in ("subtitle", "take") and not recording_tab):
             self.right.setCurrentWidget(self.inspector)
         if s.kind == "clip" and 0 <= s.index < len(self.model.timeline.clips) and not self.player.is_playing():
             self.player.seek(self.model.timeline.clips[s.index].start)
@@ -999,6 +1008,9 @@ class MainWindow(QMainWindow):
         c = p.clips[0]
         if c.type != "video" or c.trim_start or c.trim_end or c.fit_duration or abs(c.speed - 1) > 1e-6:
             return None
+        from ..effects import has_effects
+        if has_effects(c) or (c.motion != "none" and c.motion_strength > 0) or p.output.fade_in > 0 or p.output.fade_out > 0:
+            return None  # ✨ 효과·움직임·페이드가 있으면 미리보기를 만들어야 보임
         return p.resolve(c.file)
 
     def _load_preview_for_project(self):

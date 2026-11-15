@@ -50,7 +50,7 @@ def _rects(c, kind):
 
 def test_tabs_and_toolbars(win):
     w, _ = win
-    assert [w.right.tabText(i) for i in range(w.right.count())] == ["🛠 속성", "🎤 녹음", "🅰 자막", "📤 출력"]
+    assert [w.right.tabText(i) for i in range(w.right.count())] == ["🛠 속성", "✨ 효과", "🎤 녹음", "🅰 자막", "📤 출력"]
     top = [a.text() for a in w.top_toolbar.actions() if a.text()]
     assert top[:3] == ["🤖 AI 로 구성하기", "📂 열기", "💾 저장"] and "📄 대본" not in top
     assert w.btn_add_media.menu() is not None and w.btn_export_top.text() == "📤 영상 내보내기"
@@ -192,7 +192,7 @@ def test_num_fold_remembered_and_synced(win):
     w.model.select("clip", 0)
     cp = ins.clip_page
     assert cp.num.body.isHidden() and not cp.duration.isVisibleTo(ins)
-    assert cp.strength_slider.isVisibleTo(ins) and cp.speed_preset.isVisibleTo(ins) is False  # 이미지는 속도 없음
+    assert cp.btn_fx.isVisibleTo(ins) and cp.speed_preset.isVisibleTo(ins) is False  # 이미지는 속도 없음, 움직임은 ✨ 효과 탭
     cp.num.head.click()
     assert cp.duration.isVisibleTo(ins)
     assert QSettings("knhanul", "VideoComposer").value("ui/fold/num") in (True, "true")
@@ -211,9 +211,12 @@ def test_clip_basic_controls_and_buttons(win):
     w, _ = win
     cp = w.inspector.clip_page
     w.model.select("clip", 1)
-    _slide(cp.strength_slider, 0.5)
+    cp.btn_fx.click()  # 움직임·색은 ✨ 효과 탭으로
+    assert w.right.currentWidget() is w.effects_scroll
+    _slide(w.effects.strength_slider, 0.5)
     assert w.model.project.clips[1].motion_strength == pytest.approx(0.5, abs=0.01)
     w.model.undo()
+    w.right.setCurrentIndex(0)
     cp.btn_dup.click()
     assert len(w.model.project.clips) == 4
     w.model.undo()

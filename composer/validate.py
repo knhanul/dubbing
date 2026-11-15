@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from .schema import EASINGS, FITS, MOTIONS, SCHEMA_VERSION, TRANSITIONS, guess_type
+from .schema import EASINGS, FITS, LOOKS, MOTIONS, SCHEMA_VERSION, TRANSITIONS, guess_type
 
 
 class JsonExtractError(ValueError):
@@ -208,7 +208,7 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
     if not isinstance(out, dict):
         v.err("output", "객체여야 합니다.")
         out = {}
-    v.unknown(out, {"width", "height", "fps", "fit", "background", "original_volume", "file"}, "output")
+    v.unknown(out, {"width", "height", "fps", "fit", "background", "original_volume", "file", "fade_in", "fade_out"}, "output")
     for k, hi in (("width", 7680), ("height", 4320)):
         val = v.num(out, k, "output", 16, hi, integer=True)
         if _is_num(val) and int(val) % 2:
@@ -216,6 +216,8 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
     v.num(out, "fps", "output", 1, 120)
     v.enum(out, "fit", "output", FITS)
     v.num(out, "original_volume", "output", 0, 4)
+    v.num(out, "fade_in", "output", 0, 30)
+    v.num(out, "fade_out", "output", 0, 30)
     if "background" in out and not re.fullmatch(r"#[0-9A-Fa-f]{6}", str(out["background"])):
         v.err("output.background", "#RRGGBB 형식의 색이어야 합니다.")
 
@@ -226,7 +228,8 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
         v.err("clips", "클립이 하나 이상 있는 배열이 필요합니다.")
         clips = []
     allowed_clip = {"file", "type", "duration", "motion", "motion_strength", "motion_easing", "motion_from", "motion_to", "speed",
-                    "fit_duration", "trim_start", "trim_end", "mute", "volume", "fit", "transition", "label"}
+                    "fit_duration", "trim_start", "trim_end", "mute", "volume", "fit", "transition", "label",
+                    "look", "brightness", "contrast", "saturation", "vignette", "blur", "grain"}
     for i, c in enumerate(clips):
         p = f"clips[{i}]"
         if not isinstance(c, dict):
@@ -244,13 +247,15 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
             if c.get("duration") is None and c.get("fit_duration") is None:
                 v.err(f"{p}.duration", "이미지는 duration(초)이 필요합니다.")
             v.num(c, "duration", p, 0, 3600, nullable=True, exclusive_lo=True)
-            if c.get("motion") is not None:
-                v.enum(c, "motion", p, MOTIONS)
-            v.num(c, "motion_strength", p, 0, 1)
-            v.enum(c, "motion_easing", p, EASINGS)
-        else:
-            if c.get("motion") not in (None, "none"):
-                v.warn(f"{p}.motion", "움직임 효과는 이미지에만 적용됩니다.")
+        if c.get("motion") is not None:  # 움직임은 이미지·영상 모두
+            v.enum(c, "motion", p, MOTIONS)
+        v.num(c, "motion_strength", p, 0, 1)
+        v.enum(c, "motion_easing", p, EASINGS)
+        if c.get("look") is not None:
+            v.enum(c, "look", p, LOOKS)
+        for k, lo, hi in (("brightness", -0.5, 0.5), ("contrast", 0.5, 2), ("saturation", 0, 3),
+                          ("vignette", 0, 1), ("blur", 0, 1), ("grain", 0, 1)):
+            v.num(c, k, p, lo, hi)
         v.num(c, "speed", p, 0.1, 16)
         v.num(c, "fit_duration", p, 0, 3600, nullable=True, exclusive_lo=True)
         ts = v.num(c, "trim_start", p, 0)

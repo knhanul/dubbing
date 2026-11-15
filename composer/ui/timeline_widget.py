@@ -228,6 +228,12 @@ class TimelineCanvas(QWidget):
             x += step
         p.restore()
 
+    def clip_has_fx(self, i: int) -> bool:
+        """색 필터·밝기·분위기 중 하나라도 바뀐 클립 (타임라인 ✨ 표시)."""
+        from ..effects import has_effects
+        clips = self.model.project.clips
+        return 0 <= i < len(clips) and has_effects(clips[i])
+
     def take_overlap_rects(self) -> list[QRectF]:
         """더빙 조각끼리 겹친 구간 (화면 좌표)."""
         from ..edit_ops import take_overlaps
@@ -353,6 +359,13 @@ class TimelineCanvas(QWidget):
             p.save()
             p.setClipRect(rect.adjusted(3, 1, -3, -1))
             p.drawText(rect.adjusted(5, 2, -3, -2), Qt.AlignLeft | Qt.AlignVCenter, text)
+            if kind == "clip" and self.clip_has_fx(idx):  # ✨ 효과 표시 (오른쪽 위)
+                badge = QRectF(rect.right() - 20, rect.top() + 2, 17, 15)
+                p.setBrush(QColor("#ffd54f"))
+                p.setPen(Qt.NoPen)
+                p.drawRoundedRect(badge, 3, 3)
+                p.setPen(QColor("#202124"))
+                p.drawText(badge, Qt.AlignCenter, "✨")
             p.restore()
         p.setOpacity(1.0)
         self._paint_take_overlaps(p)

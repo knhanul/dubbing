@@ -71,7 +71,7 @@ def test_detects_problems_in_korean(tmp_path):
             {"file": "없는파일.png", "duration": 2},
             {"file": "a.png"},
             {"file": "b.mp4", "type": "image", "duration": 3},
-            {"file": "b.mp4", "trim_start": 5, "trim_end": 2, "speed": 0, "motion": "zoom_in"},
+            {"file": "b.mp4", "trim_start": 5, "trim_end": 2, "speed": 0, "motion": "zoom_in", "look": "neon", "blur": 2},
             {"file": "a.png", "duration": -1, "motion": "spin", "motion_strength": 3},
             {"file": "a.png", "duration": 2, "transition": {"type": "explode", "duration": 1}, "colour": 1},
         ],
@@ -83,7 +83,7 @@ def test_detects_problems_in_korean(tmp_path):
     for needle in ("output.width: 짝수여야", "output.height: 숫자여야", "output.fps: 이상 1",
                    "clips[0].file: 파일 '없는파일.png'", "clips[1].duration: 이미지는 duration",
                    "clips[2].type: 파일 확장자로는 'video'", "clips[3].trim_end", "clips[3].speed",
-                   "clips[3].motion: 움직임 효과는 이미지에만", "clips[4].duration", "clips[4].motion: 허용되지 않는 값 'spin'",
+                   "clips[3].look: 허용되지 않는 값 'neon'", "clips[3].blur", "clips[4].duration", "clips[4].motion: 허용되지 않는 값 'spin'",
                    "clips[4].motion_strength", "clips[5].transition.type", "clips[5].colour: 알 수 없는 항목",
                    "bgm.file", "bgm.volume: 숫자여야"):
         assert needle in msgs, needle

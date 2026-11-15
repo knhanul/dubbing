@@ -40,6 +40,8 @@ TRANSITIONS = [
 TRANSITION_LABELS = {
     "none": "없음(바로 전환)", "fade": "페이드(검은 화면)", "crossfade": "크로스페이드(서서히 바뀜)",
 }
+from .effects import LOOK_LABELS, LOOKS  # noqa: E402,F401  (색 필터 목록)
+
 FITS = ["cover", "contain"]  # cover = 꽉 채우고 잘라냄, contain = 레터박스(여백)
 
 
@@ -71,6 +73,8 @@ class OutputSettings:
     background: str = "#000000"
     original_volume: float = 1.0  # 모든 클립 원본 소리에 곱해지는 전체 볼륨
     file: str = "output.mp4"
+    fade_in: float = 0.0  # 영상 시작: 검은 화면에서 서서히 (소리도 함께), 초
+    fade_out: float = 0.0  # 영상 끝: 검은 화면으로 서서히 (소리도 함께), 초
 
 
 @dataclass
@@ -92,6 +96,14 @@ class Clip:
     fit: Optional[str] = None  # None 이면 output.fit
     transition: Optional[Transition] = None  # 이전 클립 -> 이 클립 전환 (None 이면 전역 기본값)
     label: str = ""
+    # ✨ 효과 (composer/effects.py) — 기본값이면 아무 필터도 안 붙음
+    look: str = "none"  # 색 필터: none | bw | sepia | vintage | warm | cool | vivid | cinematic
+    brightness: float = 0.0  # -0.5 ~ 0.5
+    contrast: float = 1.0  # 0.5 ~ 2
+    saturation: float = 1.0  # 0 ~ 3
+    vignette: float = 0.0  # 0 ~ 1 (가장자리 어둡게)
+    blur: float = 0.0  # 0 ~ 1 (흐림)
+    grain: float = 0.0  # 0 ~ 1 (필름 노이즈)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Clip":
@@ -346,6 +358,8 @@ JSON_SCHEMA: dict = {
                 "fit": {"type": "string", "enum": FITS},
                 "background": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
                 "original_volume": {"type": "number", "minimum": 0, "maximum": 4},
+                "fade_in": {"type": "number", "minimum": 0, "maximum": 30, "description": "영상 시작 페이드 인(초, 검은 화면에서)"},
+                "fade_out": {"type": "number", "minimum": 0, "maximum": 30, "description": "영상 끝 페이드 아웃(초, 검은 화면으로)"},
                 "file": {"type": "string"},
             },
             "additionalProperties": False,
@@ -375,6 +389,13 @@ JSON_SCHEMA: dict = {
                     "fit": {"type": ["string", "null"], "enum": FITS + [None]},
                     "transition": {"oneOf": [_transition, {"type": "null"}]},
                     "label": {"type": "string"},
+                    "look": {"type": "string", "enum": LOOKS, "description": "색 필터"},
+                    "brightness": {"type": "number", "minimum": -0.5, "maximum": 0.5},
+                    "contrast": {"type": "number", "minimum": 0.5, "maximum": 2},
+                    "saturation": {"type": "number", "minimum": 0, "maximum": 3},
+                    "vignette": {"type": "number", "minimum": 0, "maximum": 1},
+                    "blur": {"type": "number", "minimum": 0, "maximum": 1},
+                    "grain": {"type": "number", "minimum": 0, "maximum": 1},
                 },
                 "additionalProperties": False,
             },

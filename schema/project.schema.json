@@ -54,6 +54,18 @@
           "minimum": 0,
           "maximum": 4
         },
+        "fade_in": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 30,
+          "description": "영상 시작 페이드 인(초, 검은 화면에서)"
+        },
+        "fade_out": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 30,
+          "description": "영상 끝 페이드 아웃(초, 검은 화면으로)"
+        },
         "file": {
           "type": "string"
         }
@@ -248,6 +260,50 @@
           },
           "label": {
             "type": "string"
+          },
+          "look": {
+            "type": "string",
+            "enum": [
+              "none",
+              "bw",
+              "sepia",
+              "vintage",
+              "warm",
+              "cool",
+              "vivid",
+              "cinematic"
+            ],
+            "description": "색 필터"
+          },
+          "brightness": {
+            "type": "number",
+            "minimum": -0.5,
+            "maximum": 0.5
+          },
+          "contrast": {
+            "type": "number",
+            "minimum": 0.5,
+            "maximum": 2
+          },
+          "saturation": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 3
+          },
+          "vignette": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "blur": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "grain": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
           }
         },
         "additionalProperties": false

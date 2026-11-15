@@ -28,11 +28,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from ..effects import effect_filters, fade_filters
 from ..schema import Clip, Project
 from ..subtitles import Cue
 from ..timeline import ClipTiming, Timeline, atempo_chain, take_position
 
-BUILDER_VERSION = 5  # 5: 전환 여분(핸들) 포함 중간 파일
+BUILDER_VERSION = 6  # 6: 클립 효과(색·밝기·분위기) + 영상 움직임. 5: 전환 여분(핸들) 포함 중간 파일
 AUDIO_RATE = 48000
 
 
@@ -207,11 +208,24 @@ def build_clip_job(project: Project, clip: Clip, timing: ClipTiming, settings: R
             args += ["-ss", fmt(s_in)]
         args += ["-t", fmt(used), "-i", str(source)]
         sp = timing.speed
+        motion = clip.motion or "none"
+        moving = motion != "none" and clip.motion_strength > 0
+        k = settings.motion_upscale() if moving else 1
         vf = [f"setpts=(PTS-STARTPTS)/{fmt(sp)}" if abs(sp - 1) > 1e-6 else "setpts=PTS-STARTPTS",
-              f"fps={fps_s}"] + _fit_filters(fit, w, h, bg)
+              f"fps={fps_s}"] + _fit_filters(fit, w * k, h * k, bg)
         if freeze_pre > 1e-3:  # 앞 여분이 모자라면 첫 프레임을 멈춰서 채움
             vf.append(f"tpad=start_mode=clone:start_duration={fmt(freeze_pre)}")
+        if moving:
+            # 영상 움직임: 이미지와 같은 방식 — (확대해 둔) 프레임마다 소수점 좌표 사각형을 perspective 로 잘라 냄
+            # (zoompan 은 영상에서 프레임을 반복·반올림해 떨림). 앞 멈춤 화면 다음에 붙여 프레임 번호가 전체 길이 기준
+            vf += [f"tpad=stop_mode=clone:stop_duration={dur_s}", f"trim=duration={dur_s}", "setpts=PTS-STARTPTS",
+                   "format=yuv444p",
+                   motion_filter(motion, clip.motion_strength, frame_count(dur, fps), clip.motion_easing,
+                                 clip.motion_from, clip.motion_to)]
+            if k > 1:
+                vf.append(f"scale={w}:{h}:flags=lanczos")
 
+    vf += effect_filters(clip, h)  # ✨ 색 필터 · 밝기/대비/채도 · 흐림 · 비네팅 · 노이즈 (출력 크기에서)
     vf += ["setsar=1", "format=yuv420p",
            f"tpad=stop_mode=clone:stop_duration={dur_s}", f"trim=duration={dur_s}", "setpts=PTS-STARTPTS"]
 
@@ -337,7 +351,9 @@ def build_assembly(project: Project, timeline: Timeline, clip_files: list[Path],
         style = subtitle_force_style(project, h)
         g.append(f"[{vlast}]subtitles=filename={subs_name}:force_style='{style}'[vsub]")
         vlast = "vsub"
-    g.append(f"[{vlast}]format=yuv420p[vout]")
+    fv, fa = fade_filters(total, getattr(project.output, "fade_in", 0.0), getattr(project.output, "fade_out", 0.0))
+    g.append(f"[{vlast}]{','.join(fv + ['format=yuv420p'])}[vout]")  # 영상 시작/끝 페이드 (자막까지 함께)
+    afade = ("," + ",".join(fa)) if fa else ""
 
     # --- 오디오 ---
     idx = n
@@ -359,9 +375,9 @@ def build_assembly(project: Project, timeline: Timeline, clip_files: list[Path],
         mix.append(f"[{voice}]")
     if len(mix) > 1:
         g.append(f"{''.join(mix)}amix=inputs={len(mix)}:normalize=0:duration=first:dropout_transition=0,"
-                 f"alimiter=limit=0.97:level=0,atrim=duration={total_s}[aout]")
+                 f"alimiter=limit=0.97:level=0,atrim=duration={total_s}{afade}[aout]")
     else:
-        g.append(f"[abase]atrim=duration={total_s}[aout]")
+        g.append(f"[abase]atrim=duration={total_s}{afade}[aout]")
 
     graph = ";".join(g)
     soft = cues and not burn and subs_name

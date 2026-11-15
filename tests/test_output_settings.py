@@ -27,7 +27,7 @@ def _tabs(w):
 
 def test_settings_tab_always_visible_with_size_list(win):
     w = win
-    assert _tabs(w) == ["🛠 속성", "🎤 녹음", "🅰 자막", "📤 출력"]
+    assert _tabs(w) == ["🛠 속성", "✨ 효과", "🎤 녹음", "🅰 자막", "📤 출력"]
     page = w.inspector.output_page
     assert w.output_scroll.widget() is page
     items = [page.preset.itemText(i) for i in range(page.preset.count())]
