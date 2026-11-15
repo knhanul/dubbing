@@ -154,3 +154,15 @@ def test_old_project_migrates_with_same_timing(win, media):
     assert w.model.timeline.total == pytest.approx(7.0)
     assert [c.duration for c in pr.clips] == [3.5, 3.5]
     assert w.model.timeline.transition_span(1) == (3.0, 4.0)
+
+
+def test_cut_take_with_latency_uses_visible_position(win):
+    """녹음 지연 보정이 있으면 더빙은 타임라인에 앞당겨 보임 — 보이는 위치에서 잘려야 함."""
+    w, app = win
+    w.model.edit(lambda p: setattr(p.dubbing, "latency_ms", 200.0))
+    w.model.select("take", 0)  # take1.wav 1초, 6.5초부터 → 화면에는 6.3~7.3초
+    assert w.cut_at(6.45)
+    tk = w.model.project.dubbing.takes
+    assert len(tk) == 2 and tk[0].trim_end == pytest.approx(0.15)  # 화면 6.3초 시작 + 0.15초
+    w.model.select("take", 1)
+    assert not w.cut_at(7.35)  # 화면상 조각 밖

@@ -655,9 +655,12 @@ class MainWindow(QMainWindow):
         elif kind == "subtitle":
             self.model.edit(lambda p: box.setdefault("ok", split_cue(p, idx, t)))
         else:
-            self.model.edit(lambda p: box.setdefault("ok", split_take(p, idx, t, self._file_len)))
+            # 타임라인에는 더빙이 녹음 지연 보정만큼 앞당겨 그려지므로, 보이는 위치 기준으로 자름
+            tt = t + self.model.project.dubbing.latency_ms / 1000.0
+            self.model.edit(lambda p: box.setdefault("ok", split_take(p, idx, tt, self._file_len)))
         if not box.get("ok"):
-            self.statusBar().showMessage("자를 수 없습니다 — 재생 위치를 그 항목 안쪽(끝에서 0.1초 이상)에 두세요", 6000)
+            where = "자를 위치(재생 헤드)를 고른 더빙 조각 안쪽에" if kind == "take" else "재생 위치를 그 항목 안쪽에"
+            self.statusBar().showMessage(f"자를 수 없습니다 — {where} 두세요 (끝에서 0.1초 이상 안쪽)", 6000)
             return False
         name = {"clip": "클립", "subtitle": "자막", "take": "더빙"}[kind]
         self.model.select(kind, idx + 1)  # 뒤 조각을 고름
