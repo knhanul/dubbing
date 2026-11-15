@@ -47,7 +47,6 @@ class DubbingPanel(QWidget):
         self.rec_cue = None
         self.rec_rel = ""
         self.rec_offset = 0.0
-        self.stop_at = 0.0
         self._last_t = 0.0
         self._sync: list[float] = []  # 녹음 0초가 놓일 타임라인 위치 추정값들
         self.take_player = QMediaPlayer(self)
@@ -91,7 +90,8 @@ class DubbingPanel(QWidget):
 
         # --- 녹음 버튼 ---
         self.btn_rec = QPushButton("● 선택 자막 녹음 (R)")
-        self.btn_rec.setToolTip("목록에서 고른 자막 하나를 녹음합니다 — 조금 앞부터 재생, 자막이 끝나면 자동으로 멈춤 (R)")
+        self.btn_rec.setToolTip("목록에서 고른 자막 하나를 녹음합니다 — 조금 앞부터 재생, 직접 끝낼 때까지 녹음 "
+                                "(R·스페이스·■ 정지로 끝내기). 녹음이 자막보다 길면 자막 끝을 자동으로 늘립니다")
         self.btn_rec.setStyleSheet("QPushButton{background:#b3261e;color:white;font-weight:bold;padding:6px}")
         self.btn_session = QPushButton("● 여기부터 연속 녹음 (Shift+R)")
         self.btn_session.setToolTip("지금 재생 위치부터 영상 끝까지 이어서 녹음합니다 (Shift+R 로 끝내기)")
@@ -113,7 +113,6 @@ class DubbingPanel(QWidget):
         self.btn_test.setToolTip("녹음하지 않고 마이크 소리 크기만 봅니다(위 미터와 파형)")
         dr = QHBoxLayout(); dr.addWidget(self.dev, 1); dr.addWidget(self.btn_dev); dr.addWidget(self.btn_test)
         self.preroll = QDoubleSpinBox(); self.preroll.setRange(0, 10); self.preroll.setValue(2.0); self.preroll.setSuffix(" 초"); self.preroll.setSingleStep(0.5)
-        self.postroll = QDoubleSpinBox(); self.postroll.setRange(0, 10); self.postroll.setValue(0.5); self.postroll.setSuffix(" 초"); self.postroll.setSingleStep(0.1)
         self.rec_vol = QSpinBox(); self.rec_vol.setRange(0, 100); self.rec_vol.setValue(20); self.rec_vol.setSuffix(" %")
         self.rec_vol.setToolTip("녹음하는 동안 원본 소리 크기 (0 = 음소거)")
         self.auto_next = QCheckBox("녹음 후 다음 줄로 자동 이동"); self.auto_next.setChecked(True)
@@ -121,10 +120,9 @@ class DubbingPanel(QWidget):
         gm.addLayout(dr)
         gm.addWidget(self.strip)
         from .widgets import Collapsible
-        self.opts = Collapsible("녹음 옵션 — 프리롤 · 끝난 뒤 여유 · 원본 소리 · 자동 이동", key="rec_opts")
+        self.opts = Collapsible("녹음 옵션 — 프리롤 · 원본 소리 · 자동 이동", key="rec_opts")
         f = self.opts.form
         f.addRow("미리 재생(프리롤)", self.preroll)
-        f.addRow("끝난 뒤 여유", self.postroll)
         f.addRow("녹음 중 원본 소리", self.rec_vol)
         f.addRow("", self.auto_next)
         f.addRow("", self.live)
@@ -389,8 +387,6 @@ class DubbingPanel(QWidget):
             self._sample_sync()
             self.lbl_cue.setText(("● 녹음 중 " + self.lbl_cue.text()).strip())
             self.lbl_cue.setStyleSheet("color:#ff4d4d")
-            if self.mode == "line" and t >= self.stop_at:
-                self.stop_recording()
         else:
             self.lbl_cue.setStyleSheet("color:#ffd166")
             if self.live.isChecked() and self.player.is_playing():
@@ -481,14 +477,14 @@ class DubbingPanel(QWidget):
         self.mode, self.rec_cue, self.rec_rel = "line", cue, rel
         self.rec_offset = p0 - cue.start
         self._rec_p0, self._sync = p0, []
-        self.stop_at = cue.end + self.postroll.value()
         self.player.pause()
         self.player.seek(p0)
         self.player.set_volume_factor(self.rec_vol.value() / 100.0)
         self.recorder.start(path)
         self.player.play()
-        self.player.set_notice(f"● 녹음 중: {cue.index}번 자막")
-        self.status.emit(f"{cue.index}번 자막 녹음 중… (R 또는 정지로 끝내기)")
+        self.player.set_notice(f"● 녹음 중: {cue.index}번 자막 (R·스페이스·■ 정지로 끝내기)")
+        self.status.emit(f"{cue.index}번 자막 녹음 중… 다 읽으면 R·스페이스·■ 정지로 끝내기")
+        self._sync_rec_buttons()
 
     def toggle_session(self):
         if self.mode:
@@ -504,8 +500,9 @@ class DubbingPanel(QWidget):
         self.player.set_volume_factor(self.rec_vol.value() / 100.0)
         self.recorder.start(path)
         self.player.play()
-        self.player.set_notice("● 여기부터 연속 녹음 중 (Shift+R 로 끝내기)")
-        self.status.emit("여기부터 연속 녹음 중… (Shift+R 또는 정지로 끝내기)")
+        self.player.set_notice("● 여기부터 연속 녹음 중 (Shift+R·스페이스·■ 정지로 끝내기)")
+        self.status.emit("여기부터 연속 녹음 중… (Shift+R·스페이스·■ 정지로 끝내기)")
+        self._sync_rec_buttons()
 
     def start_free_recording(self, play_video: bool = True):
         """자유 녹음: 자막과 상관없이 지금 재생 위치부터 녹음 (영상 재생은 선택)."""
@@ -529,6 +526,14 @@ class DubbingPanel(QWidget):
         self.player.set_notice("● 자유 녹음 중 — 대본을 편하게 읽으세요")
         self.status.emit(f"자유 녹음 중… ({fmt_time(p0)}부터)")
 
+    REC_TEXT = "● 선택 자막 녹음 (R)"
+    SESSION_TEXT = "● 여기부터 연속 녹음 (Shift+R)"
+
+    def _sync_rec_buttons(self):
+        """녹음 중에는 누른 버튼이 '■ … 끝내기' 로 바뀜 (다시 누르면 끝남)."""
+        self.btn_rec.setText("■ 녹음 끝내기 (R)" if self.mode == "line" else self.REC_TEXT)
+        self.btn_session.setText("■ 연속 녹음 끝내기 (Shift+R)" if self.mode == "session" else self.SESSION_TEXT)
+
     def stop_recording(self):
         if not self.mode:
             self.player.pause()
@@ -539,6 +544,7 @@ class DubbingPanel(QWidget):
         self.player.set_notice("")
         mode, cue = self.mode, self.rec_cue
         self.mode = None
+        self._sync_rec_buttons()
         if length < 0.05:
             if mode == "free":
                 self.free_page.recording_stopped()
@@ -547,9 +553,10 @@ class DubbingPanel(QWidget):
         idx = cue.index if cue else None
         base = cue.start if cue else 0.0
         offset = self._measured_start(base + self.rec_offset) - base
-        set_take(self.model.project, idx, self.rec_rel, offset)
-        self.model.commit()
-        msg = f"저장됨: {self.rec_rel} ({length:.1f}초)"
+        take = set_take(self.model.project, idx, self.rec_rel, offset)
+        extra = self._fit_cue_to_voice(take, cue) if mode == "line" and cue is not None else ""
+        self.model.commit()  # 녹음 + 자막 끝 늘리기 = 되돌리기 한 번
+        msg = f"저장됨: {self.rec_rel} ({length:.1f}초)" + extra
         from ..edit_ops import take_overlaps
         if take_overlaps(self.model.project, self.model.take_file_len)[1]:  # 새 녹음은 그 자리 그대로, 겹침만 알림
             msg += " — ⚠ 다른 더빙 조각과 겹칩니다(타임라인 빨간 빗금). 끌어서 옮기면 옆 끝에 붙습니다"
@@ -567,6 +574,48 @@ class DubbingPanel(QWidget):
             if not getattr(self, "_free_played", True):  # 영상 없이 녹음했으면 다음 녹음은 이어서
                 self.player.seek(self.rec_offset + length)
             self.free_page.recording_stopped()
+
+    CUE_TAIL = 0.2  # 자막 끝 = 마지막 말소리 + 0.2초
+    TAKE_TAIL = 0.3  # 더빙 조각 끝 = 마지막 말소리 + 0.3초 (끝의 무음은 잘라 냄, 파일은 그대로)
+    NEXT_GAP = 0.05  # 다음 자막 시작보다 이만큼 앞까지만
+
+    def _fit_cue_to_voice(self, take, cue) -> str:
+        """선택 자막 녹음이 끝난 뒤: 끝의 무음을 잘라 내고, 목소리가 자막보다 늦게 끝나면 자막 끝을 늘림(줄이지는 않음).
+        프로젝트만 고치고 commit 은 부르는 쪽에서. 상태 표시줄에 붙일 글을 돌려줌."""
+        from ..dubbing.levels import speech_end
+        from ..subtitles import ensure_items, project_cues
+        from ..timeline import take_position
+        pr = self.model.project
+        path = pr.resolve(take.file)
+        se = speech_end(path) if path else None
+        if se is None:
+            return ""
+        flen = self.model.take_file_len(take.file)
+        if se + self.TAKE_TAIL < flen - 1e-3:
+            take.trim_end = round(se + self.TAKE_TAIL, 3)
+        cues = project_cues(pr)
+        by = {c.index: c for c in cues}
+        cur = by.get(cue.index)
+        if cur is None:
+            return ""
+        voice_end = take_position(take, by, pr.dubbing.latency_ms) + se  # 타임라인에서 목소리가 끝나는 곳
+        want = round(voice_end + self.CUE_TAIL, 3)
+        if want <= cur.end + 1e-3:
+            return ""
+        if pr.tracks.subtitle.locked:
+            return f" — 🔒 자막 트랙이 잠겨 있어 {cue.index}번 자막 끝은 늘리지 않았어요(목소리는 {fmt_time(voice_end)}까지)"
+        nxt = min((c.start for c in cues if c.start > cur.start + 1e-6), default=None)
+        note = ""
+        if nxt is not None and want > nxt - self.NEXT_GAP:
+            want = round(nxt - self.NEXT_GAP, 3)
+            note = f" (다음 자막과 겹치지 않게 {fmt_time(want)}까지만 늘렸어요)"
+            if want <= cur.end + 1e-3:
+                return " — 다음 자막과 붙어 있어 자막 끝은 늘리지 못했어요"
+        it = next((i for i in ensure_items(pr) if i.index == cue.index), None)
+        if it is None:
+            return ""
+        it.end = round(want - pr.subtitle.offset, 3)
+        return f" — {cue.index}번 자막 끝을 {fmt_time(cur.end)} → {fmt_time(want)}로 늘렸어요" + note
 
     def play_take(self, take_index: int, with_video: bool):
         takes = self.model.project.dubbing.takes

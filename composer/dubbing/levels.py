@@ -134,3 +134,28 @@ def file_peaks(path, per_sec: int = 100) -> Optional[np.ndarray]:
         _PEAK_CACHE.clear()
     _PEAK_CACHE[key] = peaks
     return peaks
+
+
+SPEECH_DB = -42.0  # 이보다 크면 '말소리' (녹음 끝의 무음 찾기)
+
+
+def speech_end(path: Path, threshold_db: float = SPEECH_DB, window: float = 0.02) -> Optional[float]:
+    """녹음 파일에서 마지막으로 말소리가 난 시각(파일 기준 초). 끝의 무음은 뺌. 말소리가 없거나 못 읽으면 None."""
+    try:
+        import soundfile as sf
+        data, sr = sf.read(str(path), dtype="float32", always_2d=True)
+    except Exception:  # noqa: BLE001
+        return None
+    if not len(data):
+        return None
+    mono = data.mean(axis=1)
+    n = max(1, int(sr * window))
+    k = len(mono) // n
+    if k == 0:
+        return None
+    blocks = mono[: k * n].reshape(k, n).astype(np.float64)
+    rms = np.sqrt(np.mean(np.square(blocks), axis=1))
+    loud = np.nonzero(20.0 * np.log10(np.maximum(rms, 1e-5)) > threshold_db)[0]
+    if not len(loud):
+        return None
+    return float((loud[-1] + 1) * n) / float(sr)
