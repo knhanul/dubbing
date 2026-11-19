@@ -220,7 +220,7 @@ def _slide(vs, v):
 
 def test_tab_and_hint(win):
     w, _ = win
-    assert w.right.tabText(1) == "✨ 효과"
+    assert w.right.tabText(3) == "✨ 효과"
     w.model.select("none", -1)
     w.right.setCurrentWidget(w.effects_scroll)
     fx = w.effects
@@ -445,8 +445,8 @@ def test_cards_fold_with_summary_and_dot(win):
         c.head.click()
     assert all(not c.is_open() and c.body.isHidden() for c in cards)
     assert fx.sec_look.header_text() == "▸ 색 필터 — 빈티지"
-    assert fx.sec_adjust.header_text() == "▸ 밝기 · 대비 · 채도 — 밝기 +10 · 채도 -5"
-    assert fx.sec_mood.header_text() == "▸ 분위기 — 비네팅 30"
+    assert fx.sec_adjust.header_text() == "▸ 밝기 · 색 — 밝기 +10 · 색 진하기 -5"
+    assert fx.sec_mood.header_text() == "▸ 분위기 — 모서리 어둡게 30"
     assert fx.sec_look.dot.isVisibleTo(fx) and fx.sec_adjust.dot.isVisibleTo(fx) and fx.sec_mood.dot.isVisibleTo(fx)
     assert QSettings("knhanul", "VideoComposer").value("ui/fold/fx_look") in (False, "false")
     from composer.ui.effects_panel import FxCard

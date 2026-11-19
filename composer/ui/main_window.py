@@ -68,43 +68,45 @@ class MainWindow(QMainWindow):
         self.timeline = TimelineView(self.model)
 
         self.image_defaults = ImageDefaultsDialog(self)  # ➕ 미디어 추가 ▾ ▸ 새 이미지 기본값
-        # 오른쪽: 작업 순서대로 4개 탭 — 🛠 속성 · 🎤 녹음 · 🅰 자막 · 📤 출력
+        # 오른쪽: 작업 순서대로 5개 탭 — 🛠 선택(고른 것에 따라 클립/자막/더빙…) · 🎤 녹음 · 🅰 자막 · ✨ 효과 · 📤 내보내기
+        from .widgets import PANEL_MIN_W, scroll_page
         self.right = QTabWidget()
         # 오른쪽 패널 내용(자막 글 길이 등)이 바뀌어도 위쪽 영역 높이·미리보기 크기에 영향 주지 않게
         self.right.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Ignored)
-        self.right.setMinimumWidth(320)
+        # 최소 폭 고정: 이보다 좁게는 못 줄임 (넓히는 건 됨 — 720px 이상이면 섹션이 2단)
+        self.right.setMinimumWidth(PANEL_MIN_W)
+        self.right.tabBar().setExpanding(True)
+        self.right.setUsesScrollButtons(False)
 
-        def scroll(w):
-            sc = QScrollArea()
-            sc.setWidgetResizable(True)
-            sc.setFrameShape(QScrollArea.NoFrame)
-            sc.setWidget(w)
-            return sc
-        self.dub_scroll = scroll(self.dub)  # 창이 낮아도 녹음 탭이 찌그러지지 않게 (스크롤)
+        self.dub_scroll = scroll_page(self.dub, footer=self.dub.footer)  # 창이 낮아도 녹음 탭이 찌그러지지 않게 (스크롤)
         self.style_panel = SubtitleStylePanel(self.model)
         self.sub_tab = QWidget()
         sl = QVBoxLayout(self.sub_tab)
+        sl.setContentsMargins(8, 8, 8, 8)
+        sl.setSpacing(10)
         sl.addWidget(self.inspector.sub_file_panel)
         sl.addWidget(self.style_panel, 1)
-        self.sub_scroll = scroll(self.sub_tab)
-        self.output_scroll = scroll(self.inspector.output_page)
+        self.sub_scroll = scroll_page(self.sub_tab)
+        self.output_scroll = scroll_page(self.inspector.output_page, footer=self.inspector.output_page.footer)
         from .effects_panel import EffectsPanel
         self.effects = EffectsPanel(self.model)
-        self.effects_scroll = scroll(self.effects)
-        self.right.addTab(self.inspector, "🛠 속성")
-        self.right.addTab(self.effects_scroll, "✨ 효과")
+        self.effects_scroll = scroll_page(self.effects, footer=self.effects.footer)
+        self.right.addTab(self.inspector, "🛠 선택")
         self.right.addTab(self.dub_scroll, "🎤 녹음")
         self.right.addTab(self.sub_scroll, "🅰 자막")
-        self.right.addTab(self.output_scroll, "📤 출력")
-        self.right.setTabToolTip(0, "타임라인에서 고른 클립·전환·자막·더빙·배경음악의 설정")
-        self.right.setTabToolTip(1, "고른 클립의 색 필터 · 밝기·대비·채도 · 분위기(비네팅·흐림·노이즈) · 움직임")
-        self.right.setTabToolTip(2, "마이크 녹음 — 자막 따라 녹음 / 자유 녹음(대본 먼저) · 녹음으로 자막 만들기")
-        self.right.setTabToolTip(3, "자막 파일 불러오기·저장 · 자막 모양(스타일)")
-        self.right.setTabToolTip(4, "영상 크기 · 기본 전환 · 자막 넣는 방식 · 시작/끝 페이드 · 내보내기")
+        self.right.addTab(self.effects_scroll, "✨ 효과")
+        self.right.addTab(self.output_scroll, "📤 내보내기")
+        self.right.setTabToolTip(0, "타임라인에서 고른 클립·전환·자막·더빙·배경음악의 설정 (아무것도 안 고르면 시작하기 단계)")
+        self.right.setTabToolTip(1, "마이크 녹음 — 자막 보며 녹음 / 자유롭게 녹음(대본 먼저) · 녹음본 고르기")
+        self.right.setTabToolTip(2, "자막 파일 불러오기·저장 · 자막 모양")
+        self.right.setTabToolTip(3, "고른 클립의 움직임 · 색 필터 · 밝기·색 · 분위기")
+        self.right.setTabToolTip(4, "영상 모양·화질 · 자막 넣는 방식 · 장면 바뀔 때 · 처음/끝 · 영상 내보내기")
+        self.inspector.title_changed.connect(lambda t: self.right.setTabText(self.right.indexOf(self.inspector), t))
         self.inspector.clip_page.effects_requested.connect(lambda: self.right.setCurrentWidget(self.effects_scroll))
         self.inspector.style_requested.connect(self.show_style_tab)
         self.right.currentChanged.connect(
             lambda i: self.dub.ensure_devices() if self.right.widget(i) is self.dub_scroll else None)
+        self.right.currentChanged.connect(self._on_right_tab)
         top = QSplitter(Qt.Horizontal)
         top.addWidget(self.player)
         top.addWidget(self.right)
@@ -129,7 +131,7 @@ class MainWindow(QMainWindow):
         ins = self.inspector
         ins.take_page.play_requested.connect(self.dub.play_take)
         ins.take_page.rerecord_requested.connect(self.rerecord_take)
-        ins.take_page.play_file_requested.connect(self.dub.play_file)
+        ins.take_page.play_file_requested.connect(lambda rel: self.dub.play_version(self.model.selection.index, rel))
         ins.take_page.delete_file_requested.connect(self.delete_take_file)
         ins.sub_file_panel.remove_subtitles_requested.connect(self.remove_all_subtitles)
         ins.bgm_page.remove_requested.connect(self.remove_bgm)
@@ -140,6 +142,8 @@ class MainWindow(QMainWindow):
         ins.empty.add_requested.connect(self.add_clips)
         ins.empty.bgm_requested.connect(lambda: self.add_bgm())
         ins.empty.sub_requested.connect(lambda: self.add_subtitle_file())
+        ins.empty.record_requested.connect(self.start_next_recording)
+        ins.empty.export_requested.connect(lambda: self.right.setCurrentWidget(self.output_scroll))
         self.dub.script_requested.connect(self.open_script_dialog)
         self.timeline.canvas.razor_requested.connect(self._razor)
         self.timeline.canvas.status_requested.connect(lambda t: self.statusBar().showMessage(t, 6000))
@@ -548,6 +552,27 @@ class MainWindow(QMainWindow):
             self.dub.mode_tabs.setCurrentIndex(1)
             self.dub.free_page.toggle_record()
 
+    def _on_right_tab(self, i: int):
+        """✨ 효과 탭에 있는 동안은 미리보기 영상 다시 만들기를 미룸 (값을 바꿀 때마다 영상 전체를 만들면 느린 PC 가 버벅임)."""
+        if hasattr(self, "auto"):
+            self.auto.set_hold(self.right.widget(i) is self.effects_scroll)
+            self._update_notice()
+
+    def start_next_recording(self) -> bool:
+        """시작하기 '● 이어서 녹음': 녹음 탭으로 가서 아직 녹음 안 한 첫 줄을 고름 (녹음은 사용자가 시작)."""
+        from ..dubbing.takes import find_take
+        self.right.setCurrentWidget(self.dub_scroll)
+        cues = self.model.cues
+        if not cues:
+            self.dub.mode_tabs.setCurrentIndex(1)
+            return False
+        self.dub.mode_tabs.setCurrentIndex(0)
+        c = next((c for c in cues if find_take(self.model.project, c.index) is None), cues[0])
+        self.model.select("subtitle", c.index)
+        self.player.seek(max(0.0, c.start - 0.05))
+        self.statusBar().showMessage(f"{c.index}번 줄을 골랐어요 — ● 이 줄 녹음 (R) 을 누르면 시작합니다", 6000)
+        return True
+
     def rerecord_take(self, i: int):
         """더빙 속성의 ● 다시 녹음: 자막 줄 녹음이면 그 줄을 다시(새 버전), 자유 녹음이면 그 자리에서 새로 녹음."""
         takes = self.model.project.dubbing.takes
@@ -609,7 +634,11 @@ class MainWindow(QMainWindow):
         except OSError as e:
             self.statusBar().showMessage(f"지울 수 없습니다: {e}", 6000)
             return False
-        self.model.commit()  # 바뀐 내용은 없지만 녹음 기록·녹음 탭 목록을 새로
+        from ..dubbing.takes import drop_take_note, note_key
+        if note_key(rel) in p.dubbing.notes:
+            self.model.edit(lambda pp: drop_take_note(pp, rel))  # 지운 녹음본의 이름·★ 도 정리
+        else:
+            self.model.commit()  # 바뀐 내용은 없지만 녹음 기록·녹음 탭 목록을 새로
         self.statusBar().showMessage(f"🗑 {Path(rel).name} 을(를) 지웠습니다", 5000)
         return True
 
@@ -994,7 +1023,9 @@ class MainWindow(QMainWindow):
             else:
                 self.player.set_notice("미리보기 영상 없음 — 타임라인 시간으로 재생(클립 그림 + 자막). 🔄 미리보기 새로 만들기")
         elif self.preview_revision != self._render_revision_key():
-            if busy:
+            if auto and self.auto.hold and not busy:
+                self.player.set_notice("효과를 고르는 중 — 다른 탭으로 가거나 ▶ 재생하면 미리보기 영상을 새로 만들어요 (위 그림이 효과 미리보기)")
+            elif busy:
                 self.player.set_notice("편집 내용을 반영한 미리보기를 만드는 중… (준비되면 자동으로 바뀜)")
             else:
                 self.player.set_notice("화면이 최신 편집과 다릅니다 — 🔄 미리보기 새로 만들기 (자막·더빙은 바로 반영됨)")

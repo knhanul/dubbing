@@ -208,6 +208,8 @@ class Dubbing:
     volume: float = 1.0
     latency_ms: float = 0.0  # 녹음 지연 보정
     takes: list[Take] = field(default_factory=list)
+    # 녹음본(파일)별 이름·★ — {"takes/line_0001_v2.wav": {"name": "밝게", "star": true}}
+    notes: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: Any) -> "Dubbing":
@@ -215,6 +217,9 @@ class Dubbing:
             return cls()
         kw = _filter_kwargs(cls, d)
         kw["takes"] = [Take(**_filter_kwargs(Take, t)) for t in kw.get("takes") or []]
+        notes = kw.get("notes")
+        kw["notes"] = {str(k): {kk: v[kk] for kk in ("name", "star") if kk in v}
+                       for k, v in notes.items() if isinstance(v, dict)} if isinstance(notes, dict) else {}
         return cls(**kw)
 
 

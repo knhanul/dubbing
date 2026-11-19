@@ -15,8 +15,13 @@ from typing import Optional
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
-def popen_kwargs() -> dict:
-    return {"creationflags": CREATE_NO_WINDOW} if CREATE_NO_WINDOW else {}
+BELOW_NORMAL_PRIORITY_CLASS = 0x00004000 if sys.platform == "win32" else 0
+
+
+def popen_kwargs(low_priority: bool = False) -> dict:
+    """low_priority: 미리보기·효과 그림처럼 뒤에서 도는 ffmpeg 는 우선순위를 낮춰 화면이 버벅이지 않게 (Windows)."""
+    flags = CREATE_NO_WINDOW | (BELOW_NORMAL_PRIORITY_CLASS if low_priority else 0)
+    return {"creationflags": flags} if flags else {}
 
 
 def _app_dir() -> Path:

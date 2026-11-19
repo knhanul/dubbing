@@ -54,13 +54,13 @@ def source_duration(project: Project):
 
 
 def _run_ffmpeg(args: list[str], duration: float, on_frac: Callable[[float], None],
-                cancel: threading.Event, log_path: Path, cwd: Optional[Path] = None) -> None:
+                cancel: threading.Event, log_path: Path, cwd: Optional[Path] = None, low_priority: bool = False) -> None:
     cmd = [ffmpeg_path()] + args
     with open(log_path, "w", encoding="utf-8", errors="replace") as log:
         log.write(" ".join(f'"{a}"' if " " in a else a for a in cmd) + "\n\n")
         log.flush()
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=log, stdin=subprocess.DEVNULL,
-                                text=True, errors="replace", cwd=str(cwd) if cwd else None, **popen_kwargs())
+                                text=True, errors="replace", cwd=str(cwd) if cwd else None, **popen_kwargs(low_priority))
         try:
             assert proc.stdout is not None
             for line in proc.stdout:
@@ -138,7 +138,7 @@ def render_project(project: Project, output: Path | str, settings: RenderSetting
         msg = f"클립 {i + 1}/{len(jobs)} 준비 중: {name}"
         progress(done_w / total_w, msg)
         _run_ffmpeg(args, job.duration, lambda f, b=done_w, w=w: progress((b + f * w) / total_w, msg),
-                    cancel, work / f"clip_{i + 1}.log")
+                    cancel, work / f"clip_{i + 1}.log", low_priority=settings.draft)
         os.replace(tmp, job.output)
         rendered += 1
         done_w += w
@@ -167,7 +167,7 @@ def render_project(project: Project, output: Path | str, settings: RenderSetting
     msg = "최종 조립 중(전환·자막·더빙·배경음악)…"
     progress(done_w / total_w, msg)
     _run_ffmpeg(plan.args, plan.total, lambda f: progress((done_w + f * assemble_w) / total_w, msg),
-                cancel, work / "assemble.log", cwd=work)
+                cancel, work / "assemble.log", cwd=work, low_priority=settings.draft)
     os.replace(tmp_out, output)
     progress(1.0, f"완료: {output.name}")
     return RenderResult(output, timeline.total, rendered, cached)

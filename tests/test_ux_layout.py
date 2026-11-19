@@ -50,7 +50,7 @@ def _rects(c, kind):
 
 def test_tabs_and_toolbars(win):
     w, _ = win
-    assert [w.right.tabText(i) for i in range(w.right.count())] == ["🛠 속성", "✨ 효과", "🎤 녹음", "🅰 자막", "📤 출력"]
+    assert [w.right.tabText(i) for i in range(w.right.count())] == ["🛠 선택", "🎤 녹음", "🅰 자막", "✨ 효과", "📤 내보내기"]
     top = [a.text() for a in w.top_toolbar.actions() if a.text()]
     assert top[:3] == ["🤖 AI 로 구성하기", "📂 열기", "💾 저장"] and "📄 대본" not in top
     assert w.btn_add_media.menu() is not None and w.btn_export_top.text() == "📤 영상 내보내기"
@@ -186,25 +186,34 @@ def test_rec_button_opens_record_tab(win, monkeypatch):
     assert seen == [2]
 
 
-def test_num_fold_remembered_and_synced(win):
+def test_numbers_shown_without_fold(win):
+    """숫자 칸은 접지 않고 바로 보임 (예전 '▸ 숫자로 정확히' 없음), 지우기·복제는 머리줄 아이콘."""
     w, _ = win
     ins = w.inspector
     w.model.select("clip", 0)
     cp = ins.clip_page
-    assert cp.num.body.isHidden() and not cp.duration.isVisibleTo(ins)
+    assert not hasattr(cp, "num")
+    assert cp.duration.isVisibleTo(ins)  # 이미지: 보이는 시간
     assert cp.btn_fx.isVisibleTo(ins) and cp.speed_preset.isVisibleTo(ins) is False  # 이미지는 속도 없음, 움직임은 ✨ 효과 탭
-    cp.num.head.click()
-    assert cp.duration.isVisibleTo(ins)
-    assert QSettings("knhanul", "VideoComposer").value("ui/fold/num") in (True, "true")
+    assert cp.btn_del.isVisibleTo(ins) and cp.btn_del.toolTip().startswith("삭제")
     w.model.select("subtitle", 1)
-    assert not ins.sub_page.num.body.isHidden()  # 다른 칸도 같이 펼쳐짐
-    ins.sub_page.num.head.click()
-    w.model.select("clip", 1)
-    assert cp.num.body.isHidden()
-    # 새로 만들어도 기억
-    from composer.ui.widgets import Collapsible
-    cp.num.head.click()
-    assert Collapsible("x", key="num").is_open()
+    assert ins.sub_page.start.isVisibleTo(ins) and ins.sub_page.end.isVisibleTo(ins)
+    # Shift + 휠/화살표 = 0.01초
+    from PySide6.QtCore import Qt
+    sp = ins.sub_page.start.spin
+    v0 = sp.value()
+    sp.stepBy(1)
+    assert sp.value() == pytest.approx(v0 + 0.1)
+    from PySide6.QtWidgets import QApplication
+    import composer.ui.widgets as wd
+    orig = QApplication.keyboardModifiers
+    try:
+        QApplication.keyboardModifiers = staticmethod(lambda: Qt.ShiftModifier)
+        sp.stepBy(1)
+    finally:
+        QApplication.keyboardModifiers = orig
+    assert sp.value() == pytest.approx(v0 + 0.11)
+    w.model.undo(); w.model.undo()
 
 
 def test_clip_basic_controls_and_buttons(win):
@@ -242,7 +251,6 @@ def test_bgm_page_edit_undo_and_lock(win):
     bp.duck.setChecked(not bp.duck.isChecked())
     w.model.undo(); w.model.undo(); w.model.undo()
     assert w.model.project.bgm.volume != pytest.approx(0.5) and w.model.project.bgm.file == "music.mp3"
-    bp.num.head.click()
     assert bp.bgm_start.isVisibleTo(ins)
     w.timeline.header.buttons[("bgm", "locked")].click()
     w.model.select("bgm")

@@ -95,7 +95,7 @@ def test_auto_stop_at_end_plus_tail_when_silent(win):
     dub.on_position(2.4)
     assert dub.mode == "line"  # 자막 끝(2.0) + 여유(0.5) 전
     dub.on_position(2.5)
-    assert dub.mode is None and not dub.extending and dub.btn_rec.text() == "● 선택 자막 녹음 (R)"
+    assert dub.mode is None and not dub.extending and dub.btn_rec.text() == "● 이 줄 녹음 (R)"
     assert len(w.model.project.dubbing.takes) == 1
     assert _cue(w, 1).end == pytest.approx(2.0)  # 목소리가 짧으면 자막은 그대로
     # 여유 시간은 옵션으로
@@ -187,12 +187,12 @@ def test_manual_stop_anytime(win):
     assert dub.mode is None
     # 연속 녹음 버튼도 녹음 중엔 '끝내기', 자막 끝에서 멈추지 않음
     dub.btn_session.click()
-    assert dub.btn_session.text() == "■ 연속 녹음 끝내기 (Shift+R)"
+    assert dub.btn_session.text() == "■ 계속 녹음 끝내기 (Shift+R)"
     _feed(w, 0.3, 0.0)
     dub.on_position(9.0)
     assert dub.mode == "session"
     dub.btn_session.click()
-    assert dub.btn_session.text() == "● 여기부터 연속 녹음 (Shift+R)"
+    assert dub.btn_session.text() == "● 여기부터 계속 (Shift+R)"
 
 
 def test_extends_cue_when_voice_longer_and_undo(win):

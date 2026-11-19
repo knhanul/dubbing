@@ -184,11 +184,11 @@ def test_style_tab_always_present_and_menu(win):
     sp = w.style_panel
     assert isinstance(sp.font_combo, QFontComboBox)
     assert w.sub_scroll.widget().isAncestorOf(sp) and w.sub_scroll.widget().isAncestorOf(w.inspector.sub_file_panel)
-    # 자주 쓰는 것(빠른 조정)만 펼쳐 두고, 글꼴·색 등은 '자세히' 안에 (처음엔 접힘)
-    assert sp.more.body.isHidden() and sp.more.body.isAncestorOf(sp.font_combo)
-    sp.more.head.click()
-    assert not sp.more.body.isHidden()
-    # 프리셋 이름 바꾸기·삭제 등은 ⋯ 메뉴
+    # '직접 바꾸기' 한 곳에 글꼴·크기·위치·색·상자·나타나기가 한 줄에 2~3개씩 (접지 않음)
+    assert not hasattr(sp, "more")
+    for wdg in (sp.font_combo, sp.size, sp.position, sp.color, sp.box, sp.appear):
+        assert sp.g_edit.isAncestorOf(wdg)
+    # 프리셋 이름 바꾸기·삭제 등은 '내 모양 관리 ▾' 메뉴
     assert sp.btn_more_preset.menu() is sp.preset_menu and len(sp.preset_actions) >= 2
     w.show_style_tab()
     assert w.right.currentWidget() is w.sub_scroll

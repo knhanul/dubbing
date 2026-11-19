@@ -27,7 +27,7 @@ def _tabs(w):
 
 def test_settings_tab_always_visible_with_size_list(win):
     w = win
-    assert _tabs(w) == ["🛠 속성", "✨ 효과", "🎤 녹음", "🅰 자막", "📤 출력"]
+    assert _tabs(w) == ["🛠 선택", "🎤 녹음", "🅰 자막", "✨ 효과", "📤 내보내기"]
     page = w.inspector.output_page
     assert w.output_scroll.widget() is page
     items = [page.preset.itemText(i) for i in range(page.preset.count())]
@@ -85,7 +85,10 @@ def test_property_tab_empty_page_and_auto_switch(win):
     assert ins.stack.currentWidget() is ins.empty
     assert "클립 2개" in ins.empty.summary.text()
     assert [b.text() for b in (ins.empty.btn_ai, ins.empty.btn_add, ins.empty.btn_bgm, ins.empty.btn_sub)] == [
-        "🤖 AI 로 구성하기", "➕ 미디어 추가 (이미지·영상)", "♪ 배경음악 넣기", "📝 자막 파일 불러오기"]
+        "🤖 AI 로 구성하기", "+ 더 넣기", "♪ 배경음악 넣기", "📝 자막 파일 불러오기"]
+    # 시작하기 단계: 클립 있음 ✓, 자막 없음 → 지금 할 일
+    assert [s.state for s in ins.empty.steps.values()] == ["done", "current", "todo", "todo", "todo"]
+    assert w.right.tabText(0) == "🛠 선택"
     asked = []
     w.ask_bgm_file = lambda: asked.append(1) or ""
     ins.empty.btn_bgm.click()
@@ -94,6 +97,7 @@ def test_property_tab_empty_page_and_auto_switch(win):
     w.right.setCurrentWidget(w.output_scroll)
     w.model.select("clip", 0)
     assert w.right.currentWidget() is ins and ins.stack.currentWidget() is ins.clip_page
+    assert w.right.tabText(0) == "🛠 클립"  # 탭 이름이 고른 것에 따라
     w.right.setCurrentWidget(w.sub_scroll)
     w.model.select("transition", 1)
     assert w.right.currentWidget() is ins and ins.stack.currentWidget() is ins.tr_page

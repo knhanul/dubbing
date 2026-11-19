@@ -126,7 +126,7 @@ def test_panel_grid_apply_one_undo_and_json(win):
     assert [lst.item(i).data(NAME_ROLE) for i in range(lst.count())] == NAMES
     assert not lst.item(0).icon().isNull()
     # 스타일 모음이 탭 맨 위
-    assert panel.layout().itemAt(0).widget().title().startswith("스타일 모음")
+    assert panel.layout().itemAt(0).widget().title().startswith("모양 고르기")
     before = asdict(win.model.project.subtitle.style)
     item = panel._preset_item("쇼츠 강조")
     lst.itemClicked.emit(item)

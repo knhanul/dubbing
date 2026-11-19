@@ -35,6 +35,8 @@ def fix_label(lab: QLabel, lines: int) -> None:
 
 
 class DubbingPanel(QWidget):
+    REC_TEXT = "● 이 줄 녹음 (R)"
+    SESSION_TEXT = "● 여기부터 계속 (Shift+R)"
     status = Signal(str)
     script_requested = Signal()
 
@@ -66,132 +68,173 @@ class DubbingPanel(QWidget):
         self._live_prev: Optional[tuple] = None  # 지난 재생 위치 — None 이면 다음 틱이 '재생 시작'
         self._rec_p0 = 0.0
 
-        # --- 큰 자막 표시 ---
-        big = QFont(self.font()); big.setPointSize(17); big.setBold(True)
-        mid = QFont(self.font()); mid.setPointSize(12); mid.setBold(True)
-        self.lbl_cur_title = QLabel("현재 자막")
+        # 배치 (위에서부터): [자막 보며 녹음 | 자유롭게 녹음] · 마이크 한 줄 + 소리 막대 · 지금/다음 자막 카드 ·
+        # [● 이 줄 녹음][● 여기부터 계속][■] · 자막 목록(진행률, 안 한 줄만 보기, 녹음본 배지 ▾) · ▸ 녹음 설정 · 바닥: 대본 출력
+        from .widgets import DIM, Footer, Section, Segmented, field, hrow
+
+        # --- 지금 / 다음 자막 카드 ---
+        big = QFont(self.font()); big.setPointSize(13); big.setBold(True)
+        mid = QFont(self.font()); mid.setPointSize(10); mid.setBold(True)
+        self.lbl_cur_title = QLabel("지금 자막")
+        self.lbl_cur_title.setStyleSheet(DIM + "font-size:11px;")
         self.lbl_cur = QLabel("—"); self.lbl_cur.setFont(big); self.lbl_cur.setWordWrap(True)
-        self.lbl_cur_time = QLabel(""); self.lbl_cur_time.setFont(mid)
+        self.lbl_cur_time = QLabel(""); self.lbl_cur_time.setFont(mid); self.lbl_cur_time.setStyleSheet("color:#f0c463")
         self.bar_cur = QProgressBar(); self.bar_cur.setRange(0, 1000); self.bar_cur.setTextVisible(False)
-        self.bar_cur.setMaximumHeight(10)
-        self.lbl_next_title = QLabel("다음 자막 (미리 보기)")
-        self.lbl_next = QLabel("—"); self.lbl_next.setFont(mid); self.lbl_next.setWordWrap(True)
-        self.lbl_next.setStyleSheet("color:#7fb3ff")
-        self.lbl_next_time = QLabel(""); self.lbl_next_time.setFont(big)
-        self.lbl_cue = QLabel(""); self.lbl_cue.setAlignment(Qt.AlignCenter)
-        cuefont = QFont(self.font()); cuefont.setPointSize(26); cuefont.setBold(True)
+        self.bar_cur.setMaximumHeight(4)
+        self.lbl_next_title = QLabel("다음")
+        self.lbl_next_title.setStyleSheet(DIM + "font-size:11px;")
+        self.lbl_next = QLabel("—"); self.lbl_next.setWordWrap(True)
+        self.lbl_next.setStyleSheet("color:#9fc3f5")
+        self.lbl_next_time = QLabel("")
+        self.lbl_cue = QLabel(""); self.lbl_cue.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        cuefont = QFont(self.font()); cuefont.setPointSize(15); cuefont.setBold(True)
         self.lbl_cue.setFont(cuefont)
 
         # 자막 글이 바뀌어도 크기가 절대 변하지 않게(바뀌면 옆의 미리보기 영상이 흔들림): 줄 수만큼 고정 높이
-        for lab, lines in ((self.lbl_cur, 3), (self.lbl_cur_time, 1), (self.lbl_next, 2), (self.lbl_next_time, 1),
+        for lab, lines in ((self.lbl_cur, 2), (self.lbl_cur_time, 1), (self.lbl_next, 1), (self.lbl_next_time, 1),
                            (self.lbl_cue, 1)):
             fix_label(lab, lines)
 
-        disp = QGroupBox()
+        disp = QWidget()
+        disp.setObjectName("nowCard")
+        disp.setAttribute(Qt.WA_StyledBackground, True)
+        disp.setStyleSheet("QWidget#nowCard{background:#1b1d22;border:1px solid #3a3f49;border-radius:5px}")
         dl = QVBoxLayout(disp)
-        dl.addWidget(self.lbl_cur_title); dl.addWidget(self.lbl_cur); dl.addWidget(self.lbl_cur_time); dl.addWidget(self.bar_cur)
-        dl.addSpacing(6)
-        row = QHBoxLayout(); row.addWidget(self.lbl_next_title); row.addStretch(1); row.addWidget(self.lbl_cue)
-        dl.addLayout(row); dl.addWidget(self.lbl_next); dl.addWidget(self.lbl_next_time)
+        dl.setContentsMargins(10, 6, 10, 6)
+        dl.setSpacing(2)
+        row = QHBoxLayout(); row.addWidget(self.lbl_cur_title); row.addStretch(1); row.addWidget(self.lbl_cue)
+        dl.addLayout(row)
+        dl.addWidget(self.lbl_cur); dl.addWidget(self.lbl_cur_time); dl.addWidget(self.bar_cur)
+        nx = QHBoxLayout(); nx.setSpacing(6)
+        nx.addWidget(self.lbl_next_title); nx.addWidget(self.lbl_next, 1); nx.addWidget(self.lbl_next_time)
+        dl.addLayout(nx)
 
         # --- 녹음 버튼 ---
-        self.btn_rec = QPushButton("● 선택 자막 녹음 (R)")
-        self.btn_rec.setToolTip("목록에서 고른 자막 하나를 녹음합니다 — 조금 앞부터 재생, 자막이 끝나면(+여유) 자동으로 멈춤. "
+        self.btn_rec = QPushButton(self.REC_TEXT)
+        self.btn_rec.setToolTip("목록에서 고른 자막 한 줄을 녹음합니다 — 조금 앞부터 재생, 자막이 끝나면(+여유) 자동으로 멈춤. "
                                 "그때 아직 말하고 있으면 말이 끝날 때까지(최대 5초 더) 기다렸다가 멈추고 자막 끝을 늘립니다. "
                                 "R·스페이스·■ 정지로 언제든 끝내기")
-        self.btn_rec.setStyleSheet("QPushButton{background:#b3261e;color:white;font-weight:bold;padding:6px}")
-        self.btn_session = QPushButton("● 여기부터 연속 녹음 (Shift+R)")
-        self.btn_session.setToolTip("지금 재생 위치부터 영상 끝까지 이어서 녹음합니다 (Shift+R 로 끝내기)")
-        self.btn_stop = QPushButton("■ 정지")
+        self.btn_rec.setStyleSheet("QPushButton{background:#b3261e;color:white;font-weight:bold;padding:6px;border-radius:4px}")
+        self.btn_rec.setMinimumHeight(34)
+        self.btn_session = QPushButton(self.SESSION_TEXT)
+        self.btn_session.setToolTip("지금 재생 위치부터 영상 끝까지 쭉 이어서 녹음합니다 (Shift+R 로 끝내기)")
+        self.btn_session.setMinimumHeight(34)
+        from PySide6.QtWidgets import QSizePolicy
+        for b in (self.btn_rec, self.btn_session):  # 글자 길이가 패널 폭을 밀지 않게
+            b.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            b.setMinimumWidth(120)
+        self.btn_stop = QPushButton("■")
+        self.btn_stop.setToolTip("정지")
+        self.btn_stop.setFixedSize(40, 34)
         rb = QHBoxLayout()
-        for b in (self.btn_rec, self.btn_session, self.btn_stop):
-            rb.addWidget(b)
+        rb.setSpacing(6)
+        rb.addWidget(self.btn_rec, 5); rb.addWidget(self.btn_session, 4); rb.addWidget(self.btn_stop)
         self.strip = MicStrip()  # 입력 소리: ● REC · 레벨 미터 · 흘러가는 파형 · 무음 경고
+        self.strip.dev_label.hide()  # 장치 이름은 바로 위 마이크 칸에 이미 보임
 
-        # --- 마이크 줄 (두 방식 공통, 맨 위) ---
-        g = QGroupBox("🎤 마이크")
-        gm = QVBoxLayout(g)
+        # --- 마이크 한 줄 (두 방식 공통) ---
         self.dev = QComboBox()
         self.dev.setToolTip("녹음할 마이크. ★ = Windows 기본 장치")
         self.dev.setMinimumHeight(26)
-        self.btn_dev = QPushButton("🔄 장치 새로고침")
-        self.btn_test = QPushButton("🎧 마이크 테스트")
+        self.dev.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.dev.setMinimumContentsLength(10)
+        self.btn_dev = QPushButton("↻")
+        self.btn_dev.setToolTip("장치 새로고침 — 마이크를 새로 꽂았으면 누르세요")
+        self.btn_dev.setFixedSize(30, 26)
+        self.btn_test = QPushButton("🎧 테스트")
         self.btn_test.setCheckable(True)
-        self.btn_test.setToolTip("녹음하지 않고 마이크 소리 크기만 봅니다(위 미터와 파형)")
-        dr = QHBoxLayout(); dr.addWidget(self.dev, 1); dr.addWidget(self.btn_dev); dr.addWidget(self.btn_test)
+        self.btn_test.setFixedHeight(26)
+        self.btn_test.setToolTip("녹음하지 않고 마이크 소리 크기만 봅니다 (아래 막대와 파형) — 초록~노랑이면 좋아요")
+        mic_row = hrow(QLabel("🎤"), self.dev, self.btn_test, self.btn_dev, stretches=[0, 1, 0, 0], spacing=4)
         self.preroll = QDoubleSpinBox(); self.preroll.setRange(0, 10); self.preroll.setValue(2.0); self.preroll.setSuffix(" 초"); self.preroll.setSingleStep(0.5)
+        self.preroll.setToolTip("녹음 직전에 앞부분을 이만큼 들려줘서 타이밍을 맞추기 쉽게 (프리롤)")
         self.postroll = QDoubleSpinBox(); self.postroll.setRange(0, 10); self.postroll.setValue(0.5); self.postroll.setSuffix(" 초"); self.postroll.setSingleStep(0.1)
-        self.postroll.setToolTip("선택 자막 녹음: 자막이 끝난 뒤 이만큼 더 녹음하고 멈춤 (그때 말하는 중이면 말이 끝날 때까지)")
+        self.postroll.setToolTip("한 줄 녹음: 자막이 끝난 뒤 이만큼 더 녹음하고 멈춤 (그때 말하는 중이면 말이 끝날 때까지)")
         self.rec_vol = QSpinBox(); self.rec_vol.setRange(0, 100); self.rec_vol.setValue(20); self.rec_vol.setSuffix(" %")
-        self.rec_vol.setToolTip("녹음하는 동안 원본 소리 크기 (0 = 음소거)")
-        self.auto_next = QCheckBox("녹음 후 다음 줄로 자동 이동"); self.auto_next.setChecked(True)
-        self.live = QCheckBox("재생할 때 녹음한 목소리 함께 듣기"); self.live.setChecked(True)
-        gm.addLayout(dr)
-        gm.addWidget(self.strip)
+        self.rec_vol.setToolTip("녹음하는 동안 원본 소리 크기 (0 = 끄기)")
+        self.auto_next = QCheckBox("녹음 후 다음 줄로"); self.auto_next.setChecked(True)
+        self.auto_next.setToolTip("한 줄 녹음이 끝나면 다음 줄을 자동으로 고릅니다")
+        self.live = QCheckBox("재생할 때 녹음 함께 듣기"); self.live.setChecked(True)
+        self.live.setToolTip("미리보기를 재생할 때 녹음한 목소리도 함께 들려줍니다")
         from .widgets import Collapsible
-        self.opts = Collapsible("녹음 옵션 — 프리롤 · 끝난 뒤 여유 · 원본 소리 · 자동 이동", key="rec_opts")
+        self.opts = Collapsible("녹음 설정 — 시작 전 듣기 · 끝난 뒤 여유 · 원본 소리", key="rec_opts")
         f = self.opts.form
-        f.addRow("미리 재생(프리롤)", self.preroll)
-        f.addRow("끝난 뒤 여유", self.postroll)
-        f.addRow("녹음 중 원본 소리", self.rec_vol)
-        f.addRow("", self.auto_next)
-        f.addRow("", self.live)
+        f.addRow(hrow(field("시작 전 듣기", self.preroll, label_w=70), field("끝난 뒤 여유", self.postroll, label_w=70)))
+        f.addRow(hrow(field("녹음 중 원본", self.rec_vol, label_w=70), self.auto_next))
+        f.addRow(self.live)
 
         # --- 자막 목록 ---
         self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["번호", "시작", "끝", "길이", "내용", "녹음"])
-        self.table.horizontalHeaderItem(5).setToolTip("✔ = 녹음 있음 · N개 = 다시 녹음한 기록 수 (더빙 조각을 고르면 🛠 속성 ▸ 녹음 기록에서 고르기)")
+        self.table.setHorizontalHeaderLabels(["#", "시작", "끝", "길이", "내용", "녹음"])
+        self.table.horizontalHeaderItem(5).setToolTip("✔ = 녹음 있음 · ✔ 3개 ▾ = 다시 녹음한 녹음본이 3개 (눌러서 고르기)")
         self.table.verticalHeader().hide()
+        self.table.verticalHeader().setDefaultSectionSize(24)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setWordWrap(False)
+        self.table.setMinimumHeight(170)
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(4, QHeaderView.Stretch)
         for i in (0, 1, 2, 3, 5):
             hh.setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        for i in (2, 3):  # 좁은 패널: 끝·길이는 줄에 마우스를 올리면 (넓으면 보임)
+            self.table.setColumnHidden(i, True)
+        self.list_sec = Section("자막 목록")
+        self.btn_todo = self.list_sec.add_link("안 한 줄만 보기", tip="아직 녹음하지 않은 줄만 목록에 보이기")
+        self.btn_todo.setCheckable(True)
+        self.btn_todo.toggled.connect(lambda on: (self.btn_todo.setText("모든 줄 보기" if on else "안 한 줄만 보기"),
+                                                  self._apply_filter()))
+        self.list_tip = QLabel("줄을 누르면 그 자리로 · 두 번 누르면 그 녹음 듣기 · '녹음' 칸 ▾ 를 누르면 녹음본 고르기")
+        self.list_tip.setWordWrap(True)
+        self.list_tip.setStyleSheet(DIM + "font-size:11px;")
+        self.list_sec.add(self.table)
+        self.list_sec.add(self.list_tip)
 
-        # 두 가지 녹음 방법: 자막 따라 녹음 / 자유 녹음(대본 먼저 → 녹음으로 자막 만들기)
+        # 두 가지 녹음 방법: 자막 보며 녹음 / 자유롭게 녹음(대본 먼저 → 녹음으로 자막 만들기)
         from .free_record import FreeRecordPage
         follow = QWidget()
         fl = QVBoxLayout(follow)
         fl.setContentsMargins(0, 0, 0, 0)
+        fl.setSpacing(8)
         fl.addWidget(disp)
         fl.addLayout(rb)
-        tip = QLabel("자막 줄을 두 번 누르면 그 녹음을 듣습니다(없으면 그 줄로 이동)")
-        tip.setStyleSheet("color:#9aa0a6;")
-        fl.addWidget(tip)
-        fl.addWidget(self.table, 1)
+        fl.addWidget(self.list_sec, 1)
         self.free_page = FreeRecordPage(self)
         self.free_page.status.connect(self.status.emit)
-        # 방식 고르기: [ 자막 따라 녹음 | 자유 녹음 ] (눌러서 바꾸는 단추 두 개)
         from PySide6.QtWidgets import QButtonGroup, QStackedWidget
         self.mode_tabs = QStackedWidget()
         self.mode_tabs.addWidget(follow)
         self.mode_tabs.addWidget(self.free_page)
         seg = QHBoxLayout(); seg.setSpacing(0)
-        self.btn_mode_follow = QPushButton("🎤 자막 따라 녹음")
+        self.btn_mode_follow = QPushButton("🎤 자막 보며 녹음")
         self.btn_mode_follow.setToolTip("이미 있는 자막 시간에 맞춰 한 줄씩 녹음")
-        self.btn_mode_free = QPushButton("🎙 자유 녹음 (대본 먼저)")
+        self.btn_mode_free = QPushButton("🎙 자유롭게 녹음 (대본 먼저)")
         self.btn_mode_free.setToolTip("대본을 보며 편하게 녹음한 뒤, 녹음에 맞춰 자막(SRT)을 자동으로 만들기")
         self.mode_group = QButtonGroup(self)
         for k, b in enumerate((self.btn_mode_follow, self.btn_mode_free)):
             b.setCheckable(True)
-            b.setMinimumHeight(30)
-            b.setStyleSheet("QPushButton:checked{background:#3b4250;color:#fff;font-weight:bold;border:1px solid #8ab4f8}")
+            b.setFixedHeight(30)
+            b.setStyleSheet(Segmented.CSS)
             self.mode_group.addButton(b, k)
-            seg.addWidget(b)
+            seg.addWidget(b, 1)
         self.btn_mode_follow.setChecked(True)
         self.mode_group.idClicked.connect(self.mode_tabs.setCurrentIndex)
         self.mode_tabs.currentChanged.connect(lambda i: self.mode_group.button(i).setChecked(True))
-        seg.addSpacing(8)
         self.btn_script = QPushButton("📄 대본 출력…")
-        self.btn_script.setToolTip("자막·대본을 인쇄용으로 (Ctrl+P)")
+        self.btn_script.setToolTip("자막·대본을 종이로 보며 녹음하려면 — 인쇄용으로 만들기 (Ctrl+P)")
         self.btn_script.clicked.connect(self.script_requested.emit)
-        seg.addWidget(self.btn_script)
+        self.footer = Footer()
+        script_tip = QLabel("대본을 종이로 보며 녹음하려면")
+        script_tip.setStyleSheet(DIM + "font-size:11px;")
+        self.footer.add(hrow(script_tip, self.btn_script, stretches=[1, 0]))
 
         lay = QVBoxLayout(self)
-        lay.addWidget(g)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(8)
         lay.addLayout(seg)
+        lay.addWidget(mic_row)
+        lay.addWidget(self.strip)
         lay.addWidget(self.mode_tabs, 1)
         lay.addWidget(self.opts)
 
@@ -202,6 +245,7 @@ class DubbingPanel(QWidget):
         self.btn_test.toggled.connect(self.set_monitoring)
         self.dev.currentIndexChanged.connect(self._device_changed)
         self.table.itemSelectionChanged.connect(self._table_selected)
+        self.table.cellClicked.connect(self._cell_clicked)
         self.table.cellDoubleClicked.connect(lambda r, c: self._row_activated(r))
         player.position_changed.connect(self.on_position)
         model.changed.connect(self.refresh_table)
@@ -298,22 +342,74 @@ class DubbingPanel(QWidget):
         sel = self.model.selection.index if self.model.selection.kind == "subtitle" else None
         self.table.blockSignals(True)
         self.table.setRowCount(len(cues))
+        n_rec = 0
         for r, c in enumerate(cues):
             take = find_take(self.model.project, c.index)
             n = count_versions(self.model.project, c.index) if take else 0
+            n_rec += 1 if take else 0
             vals = [str(c.index), fmt_time(c.start), fmt_time(c.end), f"{c.duration:.2f}", c.text.replace("\n", " / "),
-                    ("✔" + (f" {n}개" if n > 1 else "")) if take else ""]
+                    ("✔" + (f" {n}개 ▾" if n > 1 else "")) if take else ""]
+            tip = f"{c.index}번 · {fmt_time(c.start)} ~ {fmt_time(c.end)} ({c.duration:.2f}초)\n{c.text}"
             for col, v in enumerate(vals):
                 it = self.table.item(r, col)
                 if it is None:
                     it = QTableWidgetItem()
                     self.table.setItem(r, col, it)
                 it.setText(v)
+                it.setToolTip(tip if col != 5 else ("녹음본 고르기 — 눌러서 열기" if n > 1 else "녹음 있음" if take else "아직 녹음 안 함"))
                 if col == 5:
                     it.setForeground(QColor("#3fa36b"))
             if c.index == sel:
                 self.table.selectRow(r)
         self.table.blockSignals(False)
+        self.list_sec.set_title(f"자막 {len(cues)}줄 · 녹음 {n_rec}줄" if cues else "자막 목록")
+        self._apply_filter()
+
+    def _apply_filter(self):
+        """'안 한 줄만 보기': 녹음이 있는 줄 숨기기."""
+        only_todo = self.btn_todo.isChecked()
+        for r, c in enumerate(self.model.cues):
+            self.table.setRowHidden(r, only_todo and find_take(self.model.project, c.index) is not None)
+
+    def _cell_clicked(self, row: int, col: int):
+        if col == 5:
+            self.version_menu(row)
+
+    def version_menu(self, row: int, exec_menu: bool = True):
+        """목록 '녹음' 칸 ▾: 그 줄의 녹음본 고르기 (이름·★·시각·길이). 고르면 그 녹음본을 씀 (Ctrl+Z 로 되돌리기)."""
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QMenu
+        from ..dubbing.takes import take_note, take_versions, use_version
+        c = self._row_cue(row)
+        if c is None:
+            return None
+        take = find_take(self.model.project, c.index)
+        if take is None:
+            return None
+        vers = take_versions(self.model.project, take)
+        if len(vers) < 2:
+            return None
+        menu = QMenu(self)
+        menu.addSection(f"{c.index}번 줄 녹음본 {len(vers)}개")
+        locked = self.model.project.tracks.dubbing.locked
+        for v in vers:
+            note = take_note(self.model.project, v.rel)
+            when = time.strftime("%H:%M", time.localtime(v.mtime)) if v.mtime else "-"
+            label = (f"v{v.version}" + (f" · {note['name']}" if note["name"] else "") + (" ★" if note["star"] else "")
+                     + f" · {when} · {v.length:.1f}초")
+            a = menu.addAction(label)
+            a.setCheckable(True)
+            a.setChecked(v.current)
+            a.setEnabled(not locked)
+            ti = self.model.project.dubbing.takes.index(take)
+            a.triggered.connect(lambda _=False, vv=v, ti=ti: None if vv.current else
+                                self.model.edit(lambda p: use_version(p.dubbing.takes[ti], vv.rel, vv.length)))
+        menu.addSeparator()
+        k = self.model.project.dubbing.takes.index(take)
+        menu.addAction("🛠 자세히 (이름 · ★ · 듣기 · 지우기)…", lambda: self.model.select("take", k))
+        if exec_menu:
+            menu.exec(QCursor.pos())
+        return menu
 
     def _row_cue(self, row):
         cues = self.model.cues
@@ -604,13 +700,11 @@ class DubbingPanel(QWidget):
             return True
         return False
 
-    REC_TEXT = "● 선택 자막 녹음 (R)"
-    SESSION_TEXT = "● 여기부터 연속 녹음 (Shift+R)"
 
     def _sync_rec_buttons(self):
         """녹음 중에는 누른 버튼이 '■ … 끝내기' 로 바뀜 (다시 누르면 끝남)."""
         self.btn_rec.setText("■ 녹음 끝내기 (R)" if self.mode == "line" else self.REC_TEXT)
-        self.btn_session.setText("■ 연속 녹음 끝내기 (Shift+R)" if self.mode == "session" else self.SESSION_TEXT)
+        self.btn_session.setText("■ 계속 녹음 끝내기 (Shift+R)" if self.mode == "session" else self.SESSION_TEXT)
 
     def stop_recording(self):
         if not self.mode:
@@ -717,6 +811,28 @@ class DubbingPanel(QWidget):
             self.take_player.setPosition(int(max(float(take.trim_start or 0.0), -pos) * 1000))
             self.player.play()
         self.take_player.play()
+
+    def play_version(self, take_index: int, rel: str) -> bool:
+        """녹음본 ▶: 그 녹음본을 이 조각 자리에서 영상과 함께 (입 모양·타이밍 비교). 조각이 없으면 파일만."""
+        takes = self.model.project.dubbing.takes
+        path = self.model.project.resolve(rel)
+        if not path or not path.exists():
+            self.status.emit(f"파일이 없습니다: {rel}")
+            return False
+        if not (0 <= take_index < len(takes)):
+            return self.play_file(rel)
+        take = takes[take_index]
+        self.stop_live()
+        pos = self.model.take_positions()[take_index]
+        ts = float(take.trim_start or 0.0)
+        self.take_player.setSource(QUrl.fromLocalFile(str(path)))
+        self.take_audio.setVolume(min(1.0, take.volume))
+        self.player.seek(max(0.0, pos + ts))
+        self.take_player.setPosition(int(max(ts, -pos) * 1000))
+        self.player.play()
+        self.take_player.play()
+        self.status.emit(f"▶ {Path(rel).name} — 영상과 함께 듣는 중")
+        return True
 
     def play_file(self, rel: str) -> bool:
         """녹음 기록의 ▶ 듣기: 파일 하나만 처음부터."""

@@ -131,3 +131,32 @@ def use_version(take: Take, rel: str, length: float) -> None:
         take.trim_start = round(ts, 4) if ts > 0 else 0.0
         if take.trim_end is not None and (take.trim_end > length - 1e-3 or take.trim_end <= ts + 0.05):
             take.trim_end = None
+
+
+# ------------------------------------------------------------------ 녹음본 이름 · ★ (project.dubbing.notes)
+def note_key(rel: str) -> str:
+    return rel.replace("\\", "/")
+
+
+def take_note(project: Project, rel: str) -> dict:
+    """{'name': str, 'star': bool} (없으면 빈 값)."""
+    n = project.dubbing.notes.get(note_key(rel)) or {}
+    return {"name": str(n.get("name") or ""), "star": bool(n.get("star"))}
+
+
+def set_take_note(project: Project, rel: str, name: Optional[str] = None, star: Optional[bool] = None) -> None:
+    k = note_key(rel)
+    cur = take_note(project, rel)
+    if name is not None:
+        cur["name"] = name.strip()
+    if star is not None:
+        cur["star"] = bool(star)
+    clean = {kk: v for kk, v in cur.items() if v}
+    if clean:
+        project.dubbing.notes[k] = clean
+    else:
+        project.dubbing.notes.pop(k, None)
+
+
+def drop_take_note(project: Project, rel: str) -> None:
+    project.dubbing.notes.pop(note_key(rel), None)

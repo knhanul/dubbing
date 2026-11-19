@@ -83,7 +83,7 @@ class StyleSample(QWidget):
         p.end()
 
 
-THUMB = QSize(128, 72)
+THUMB = QSize(112, 63)
 NAME_ROLE = Qt.UserRole + 1
 
 
@@ -110,6 +110,10 @@ def preset_thumbnail(style: SubtitleStyle, out_w: int, out_h: int, text: str = "
 
 
 class ColorButton(QPushButton):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.setFixedWidth(76)
+
     def set_color(self, color: str):
         self.color = color
         self.setText(color.upper())
@@ -131,37 +135,37 @@ class SubtitleStylePanel(QWidget):
         self.confirm: Callable[[str], bool] = lambda t: QMessageBox.question(self, "스타일 모음", t) == QMessageBox.Yes
         self.notify: Callable[[str], None] = lambda t: QMessageBox.information(self, "스타일 모음", t)
 
+        from PySide6.QtWidgets import QMenu, QToolButton
+        from .widgets import DIM, Section, field, hrow, shrink
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(10)
 
-        # --- 스타일 모음 ---
-        g_pre = QGroupBox("스타일 모음 — 누르면 바로 적용 (Ctrl+Z 로 되돌리기)")
-        pl = QVBoxLayout(g_pre)
-        pl.setContentsMargins(6, 6, 6, 6)
+        # --- 모양 고르기 (스타일 모음, 3열) ---
+        g_pre = Section("모양 고르기")
+        g_pre.setToolTip("누르면 바로 적용 (Ctrl+Z 로 되돌리기)")
         self.presets = QListWidget()
         self.presets.setViewMode(QListView.IconMode)
         self.presets.setIconSize(THUMB)
-        self.presets.setGridSize(QSize(THUMB.width() + 12, THUMB.height() + 26))
+        self.presets.setGridSize(QSize(THUMB.width() + 8, THUMB.height() + 22))
         self.presets.setResizeMode(QListView.Adjust)
         self.presets.setMovement(QListView.Static)
         self.presets.setWrapping(True)
         self.presets.setUniformItemSizes(True)
         self.presets.setWordWrap(True)
-        self.presets.setFixedHeight(2 * (THUMB.height() + 26) + 12)
-        self.presets.setToolTip("스타일을 누르면 지금 프로젝트 자막에 적용됩니다")
-        pl.addWidget(self.presets)
-        r = QHBoxLayout()
-        self.btn_save_preset = QPushButton("내 스타일로 저장…")
+        self.presets.setFixedHeight(2 * (THUMB.height() + 22) + 8)
+        self.presets.setToolTip("모양을 누르면 지금 프로젝트 자막에 적용됩니다")
+        g_pre.add(self.presets)
+        self.btn_save_preset = QPushButton("내 모양으로 저장…")
         self.btn_rename_preset = QPushButton("이름 바꾸기…")
         self.btn_delete_preset = QPushButton("삭제")
         self.btn_import_preset = QPushButton("가져오기…")
         self.btn_export_preset = QPushButton("내보내기…")
-        # 자주 쓰는 '내 스타일로 저장'만 보이고, 나머지는 ⋯ 메뉴 (같은 단추를 메뉴가 눌러 줌)
-        from PySide6.QtWidgets import QMenu, QToolButton
-        r.addWidget(self.btn_save_preset)
-        r.addStretch(1)
+        # 자주 쓰는 '내 모양으로 저장'만 보이고, 나머지는 '내 모양 관리 ▾' 메뉴 (같은 단추를 메뉴가 눌러 줌)
         self.btn_more_preset = QToolButton()
-        self.btn_more_preset.setText("⋯ 이름 바꾸기 · 삭제 · 가져오기 · 내보내기")
+        self.btn_more_preset.setText("내 모양 관리 ▾")
+        self.btn_more_preset.setToolTip("이름 바꾸기 · 삭제 · 가져오기 · 내보내기")
         self.btn_more_preset.setPopupMode(QToolButton.InstantPopup)
         self.preset_menu = QMenu(self.btn_more_preset)
         self.preset_actions = {}
@@ -172,96 +176,70 @@ class SubtitleStylePanel(QWidget):
         self.preset_menu.aboutToShow.connect(
             lambda: [a.setEnabled(b.isEnabled()) for a, b in self.preset_actions.values()])
         self.btn_more_preset.setMenu(self.preset_menu)
-        r.addWidget(self.btn_more_preset)
-        pl.addLayout(r)
+        g_pre.row(self.btn_save_preset, None, self.btn_more_preset, stretches=[0, 1, 0])
         outer.addWidget(g_pre)
 
+        # --- 견본 (실제 첫 자막 문장, 낮게) ---
         self.sample = StyleSample()
+        self.sample.setMinimumHeight(0)
+        self.sample.setFixedHeight(96)
         outer.addWidget(self.sample)
-        row = QHBoxLayout()
-        self.btn_replay = QPushButton("▶ 효과 다시 보기")
-        self.btn_reset = QPushButton("기본값으로")
-        row.addWidget(self.btn_replay); row.addStretch(1); row.addWidget(self.btn_reset)
-        outer.addLayout(row)
 
-        # --- 빠른 조정 (크기 · 위치 · 배경 상자) + ▸ 자세히 (나머지 모두, 펼침 기억) ---
-        from .widgets import Collapsible
-        g_quick = QGroupBox("빠른 조정")
-        quick = QFormLayout(g_quick)
-        outer.addWidget(g_quick)
-        self.more = Collapsible("자세히 — 글꼴 · 색 · 외곽선 · 상자 · 여백 · 나타나기", key="style_more")
-        outer.addWidget(self.more)
-        body = QWidget(); lay = QVBoxLayout(body); lay.setContentsMargins(0, 0, 0, 0)
-        self.more.form.addRow(body)
-
-        # --- 글꼴 ---
-        g_font = QGroupBox("글꼴")
-        f = QFormLayout(g_font)
+        # --- 직접 바꾸기: 한 줄에 2~3칸 ---
+        g_edit = self.g_edit = Section("직접 바꾸기")
+        self.btn_replay = g_edit.add_link("▶ 나타나기 다시 보기", tip="견본에서 나타나기 효과를 처음부터")
+        self.btn_reset = g_edit.add_link("처음 모양으로", tip="자막 모양을 기본값으로 (Ctrl+Z 로 되돌리기)")
         self.font_combo = QFontComboBox()
-        self.korean_only = QCheckBox("한글 글꼴만 보기")
+        self.font_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.font_combo.setMinimumContentsLength(6)
+        self.korean_only = QCheckBox("한글 글꼴만")
         self.korean_only.setChecked(True)
-        self.font_preview = QLabel("가나다라마바사 안녕하세요 ABC 123")
-        self.font_preview.setMinimumHeight(34)
-        self.font_preview.setStyleSheet("background:#20232a; color:#fff; padding:4px 8px; border-radius:4px;")
+        self.font_preview = QLabel("가나다 안녕하세요 ABC 123")
+        self.font_preview.setFixedHeight(26)
+        self.font_preview.setStyleSheet("background:#20232a; color:#fff; padding:2px 8px; border-radius:4px;")
+        shrink(self.font_preview)
         self.size = QSpinBox(); self.size.setRange(8, 300); self.size.setSuffix(" px")
         self.size.setToolTip("출력 영상 높이 기준 픽셀 (1080p 에서 48px 정도가 보통)")
         self.bold = QCheckBox("굵게")
-        f.addRow("글꼴", self.font_combo)
-        f.addRow("", self.korean_only)
-        f.addRow("견본", self.font_preview)
-        f.addRow("", self.bold)
-        lay.addWidget(g_font)
-
-        # --- 색 ---
-        g_col = QGroupBox("색")
-        f = QFormLayout(g_col)
-        self.color = ColorButton()
-        self.outline_color = ColorButton()
-        self.outline = QDoubleSpinBox(); self.outline.setRange(0, 20); self.outline.setSingleStep(0.5); self.outline.setSuffix(" px")
-        self.box = QCheckBox("글자 뒤에 배경 상자")
-        self.box_color = ColorButton()
-        self.box_opacity = QSlider(Qt.Horizontal); self.box_opacity.setRange(0, 100)
-        self.box_opacity_lbl = QLabel()
-        self.box_padding = QSpinBox(); self.box_padding.setRange(0, 200); self.box_padding.setSuffix(" px")
-        f.addRow("글자", self.color)
-        r = QHBoxLayout(); r.addWidget(self.outline_color); r.addWidget(QLabel("두께")); r.addWidget(self.outline)
-        f.addRow("외곽선", r)
-        f.addRow("상자 색", self.box_color)
-        r = QHBoxLayout(); r.addWidget(self.box_opacity, 1); r.addWidget(self.box_opacity_lbl)
-        f.addRow("상자 불투명도", r)
-        f.addRow("상자 여백", self.box_padding)
-        lay.addWidget(g_col)
-
-        # --- 위치 ---
-        g_pos = QGroupBox("위치")
-        f = QFormLayout(g_pos)
+        g_edit.row(field("글꼴", self.font_combo, label_w=36), field("크기", self.size, label_w=28), self.bold,
+                   stretches=[5, 3, 0])
+        g_edit.row(self.font_preview, self.korean_only, stretches=[1, 0])
         self.position = QComboBox()
         for k, v in POSITION_LABELS.items():
             self.position.addItem(v, k)
         self.margin = QSpinBox(); self.margin.setRange(0, 2000); self.margin.setSuffix(" px")
         self.margin.setToolTip("아래/위에 둘 때 화면 가장자리에서 떨어진 거리 (출력 영상 기준 픽셀)")
-        f.addRow("가장자리 여백", self.margin)
-        quick.addRow("크기", self.size)
-        quick.addRow("위치", self.position)
-        quick.addRow("", self.box)
-        lay.addWidget(g_pos)
-
-        # --- 나타나기 ---
-        g_ap = QGroupBox("나타나기")
-        f = QFormLayout(g_ap)
+        g_edit.row(field("위치", self.position, label_w=36), field("가장자리 여백", self.margin, label_w=76))
+        self.color = ColorButton()
+        self.outline_color = ColorButton()
+        self.outline = QDoubleSpinBox(); self.outline.setRange(0, 20); self.outline.setSingleStep(0.5); self.outline.setSuffix(" px")
+        self.outline.setToolTip("글자 테두리(외곽선) 두께")
+        g_edit.row(field("글자", self.color, label_w=36),
+                   field("테두리", hrow(self.outline_color, self.outline, spacing=4), label_w=40), stretches=[2, 3])
+        self.box = QCheckBox("배경 상자")
+        self.box.setToolTip("글자 뒤에 배경 상자를 깔기")
+        self.box_color = ColorButton()
+        self.box_opacity = QSlider(Qt.Horizontal); self.box_opacity.setRange(0, 100)
+        self.box_opacity_lbl = QLabel()
+        self.box_opacity_lbl.setMinimumWidth(34)
+        self.box_padding = QSpinBox(); self.box_padding.setRange(0, 200); self.box_padding.setSuffix(" px")
+        self.box_padding.setToolTip("상자 안쪽 여백")
+        g_edit.row(self.box, field("상자 색", self.box_color, label_w=40), stretches=[1, 1])
+        g_edit.row(field("진하기", hrow(self.box_opacity, self.box_opacity_lbl, stretches=[1, 0], spacing=4), label_w=36),
+                   field("상자 여백", self.box_padding, label_w=52), stretches=[3, 2])
         self.appear = QComboBox()
         for k, v in APPEAR_LABELS.items():
             self.appear.addItem(v, k)
         self.appear_duration = QDoubleSpinBox(); self.appear_duration.setRange(0.05, 5); self.appear_duration.setSingleStep(0.05)
         self.appear_duration.setDecimals(2); self.appear_duration.setSuffix(" 초")
         self.appear_duration.setToolTip("효과 시간. 타이핑은 한 자막을 다 치는 시간(글자가 많으면 글자당 최소 0.04초)")
-        f.addRow("효과", self.appear)
-        f.addRow("효과 시간", self.appear_duration)
-        lay.addWidget(g_ap)
+        shrink(self.appear, self.position)
+        g_edit.row(field("나타나기", self.appear, label_w=52), field("걸리는 시간", self.appear_duration, label_w=64))
+        outer.addWidget(g_edit)
 
         self.note = QLabel()
         self.note.setWordWrap(True)
-        self.note.setStyleSheet("color:#9aa0a6;")
+        self.note.setStyleSheet(DIM + "font-size:11px;")
         outer.addWidget(self.note)
         outer.addStretch(1)
 
@@ -346,7 +324,7 @@ class SubtitleStylePanel(QWidget):
                 st = self.preset_style(pr)
                 it = QListWidgetItem(QIcon(preset_thumbnail(st, w, h)), pr.name if pr.builtin else f"★ {pr.name}")
                 it.setData(NAME_ROLE, pr.name)
-                tip = pr.description or "내 스타일"
+                tip = pr.description or "내 모양"
                 if pr.fonts and st.font != pr.fonts[0]:
                     tip += f"\n(글꼴 '{pr.fonts[0]}' 이 없어 '{st.font}' 로 대신합니다)"
                 it.setToolTip(tip)
@@ -404,7 +382,7 @@ class SubtitleStylePanel(QWidget):
         return p if p.suffix.lower() == ".json" else p.with_suffix(".json")
 
     def save_preset(self):
-        name = self.ask_text("내 스타일로 저장", "스타일 이름:", "내 스타일")
+        name = self.ask_text("내 모양으로 저장", "모양 이름:", "내 모양")
         if not name:
             return
         existing = self.store.find(name)
@@ -439,7 +417,7 @@ class SubtitleStylePanel(QWidget):
         pr = self.selected_preset()
         if not pr or pr.builtin:
             return
-        if not self.confirm(f"내 스타일 '{pr.name}' 을(를) 지울까요?\n(프로젝트에 이미 적용된 자막 모양은 그대로입니다)"):
+        if not self.confirm(f"내 모양 '{pr.name}' 을(를) 지울까요?\n(프로젝트에 이미 적용된 자막 모양은 그대로입니다)"):
             return
         self.store.delete(pr.name)
         self.fill_presets()
@@ -458,13 +436,13 @@ class SubtitleStylePanel(QWidget):
 
     def export_presets(self):
         if not self.store.user:
-            self.notify("내보낼 내 스타일이 없습니다. 먼저 '내 스타일로 저장…'을 하세요.")
+            self.notify("내보낼 내 모양이 없습니다. 먼저 '내 모양으로 저장…'을 하세요.")
             return
         path = self.ask_save_file("내 자막 스타일.json")
         if not path:
             return
         self.store.export(path)
-        self.notify(f"내 스타일 {len(self.store.user)}개를 저장했습니다:\n{path}")
+        self.notify(f"내 모양 {len(self.store.user)}개를 저장했습니다:\n{path}")
 
     def reset_defaults(self):
         d = SubtitleStyle()
@@ -504,11 +482,13 @@ class SubtitleStylePanel(QWidget):
             self.appear_duration.setEnabled(st.appear != "none")
         finally:
             self._loading = False
+        cues = self.model.cues
+        self.sample.text = cues[0].text if cues else SAMPLE_TEXT  # 실제 첫 자막 문장으로 보여 줌
         self.sample.set_style(st, p.output.width, p.output.height)
         self.fill_presets()
         if not p.subtitle.burn_in:
-            self.note.setText("⚠ 지금은 '소프트 자막'(켜고 끄는 자막)으로 내보내도록 되어 있어, 최종 영상에서는 이 스타일·효과가 "
-                              "적용되지 않습니다(재생 프로그램이 정함). ⚙ 출력 설정 ▸ 자막 ▸ '영상에 자막 입히기'를 켜세요.")
+            self.note.setText("⚠ 지금은 '소프트 자막'(켜고 끄는 자막)으로 내보내도록 되어 있어, 최종 영상에서는 이 모양·효과가 "
+                              "적용되지 않습니다(재생 프로그램이 정함). 📤 내보내기 탭 ▸ 자막 넣는 방식 ▸ '영상에 새기기'를 고르세요.")
         else:
             self.note.setText("바꾸면 미리보기 화면의 자막에 바로 반영됩니다(다시 렌더하지 않음). 영상을 내보낼 때 같은 모양으로 "
                               "영상에 새겨집니다. 미리보기의 효과는 비슷하게 흉내 낸 것이라 실제와 약간 다를 수 있습니다.")

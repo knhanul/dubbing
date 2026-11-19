@@ -407,7 +407,7 @@ def _aligner(store):
 def test_free_tab_buttons_and_flow(win, monkeypatch):
     w, d, app = win
     fp = w.dub.free_page
-    assert w.dub.btn_mode_follow.text() == "🎤 자막 따라 녹음" and w.dub.btn_mode_free.text() == "🎙 자유 녹음 (대본 먼저)"
+    assert w.dub.btn_mode_follow.text() == "🎤 자막 보며 녹음" and w.dub.btn_mode_free.text() == "🎙 자유롭게 녹음 (대본 먼저)"
     w.dub.btn_mode_free.click()
     assert w.dub.mode_tabs.currentWidget() is fp and w.dub.btn_mode_free.isChecked()
     assert fp.opts.body.isHidden()  # 자막 만들기 옵션은 접혀 있음

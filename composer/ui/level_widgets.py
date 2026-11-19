@@ -163,6 +163,8 @@ class MicStrip(QWidget):
         self.wave = LiveWave()
         self.dev_label = QLabel("")
         self.dev_label.setStyleSheet("color:#9aa0a6")
+        self.dev_label.setMinimumWidth(0)
+        self.dev_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)  # 긴 장치 이름이 패널 폭을 밀지 않게
         self.warn = QLabel("⚠ " + SILENCE_WARNING)
         self.warn.setWordWrap(True)
         self.warn.setStyleSheet("QLabel{background:#5c3b00;color:#ffd27a;font-weight:bold;padding:4px;border-radius:3px}")

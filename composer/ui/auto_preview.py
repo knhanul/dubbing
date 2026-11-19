@@ -3,6 +3,8 @@
 * 영상/소리에 영향을 주는 값(key)이 바뀐 경우에만 다시 만듭니다(자막·더빙 위치는 화면에서 바로 반영되므로 제외).
 * 만드는 중에 또 편집하면 진행 중인 렌더를 취소하고 끝나는 대로 새로 시작합니다.
 * 실제 렌더 실행(start/cancel)은 주입받으므로 단위 테스트에서 가짜로 바꿀 수 있습니다.
+* hold(잠시 멈춤): ✨ 효과 탭에서 값을 이리저리 바꾸는 동안에는 영상 전체를 다시 만들지 않고 기다립니다(느린 PC 버벅임 방지).
+  탭을 떠나거나 재생을 누르면(request) 그때 만듭니다.
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ class AutoPreview(QObject):
         super().__init__(parent)
         self.key_fn, self.start_fn, self.cancel_fn = key_fn, start_fn, cancel_fn
         self.enabled = True
+        self.hold = False  # True 면 편집해도 타이머를 걸지 않음 (set_hold(False) 때 한 번에)
         self.rendered_key: Optional[object] = None  # 지금 화면에 있는 미리보기의 key
         self.inflight_key: Optional[object] = None  # 만드는 중인 key
         self.pending = False  # 진행 중 렌더가 끝나면 다시 시작해야 함
@@ -42,9 +45,23 @@ class AutoPreview(QObject):
     def state(self) -> str:
         return "rendering" if self.rendering or self.pending else "waiting" if self.timer.isActive() else "idle"
 
+    def set_hold(self, on: bool) -> None:
+        """잠시 멈춤 켜기/끄기. 끌 때 바뀐 게 있으면 평소처럼 디바운스 후 렌더."""
+        on = bool(on)
+        if on == self.hold:
+            return
+        self.hold = on
+        if on:
+            self.timer.stop()
+            self.state_changed.emit(self.state())
+        else:
+            self.notify_changed()
+
     def notify_changed(self) -> None:
-        """프로젝트가 바뀔 때마다 호출. 영상에 영향이 있으면 디바운스 후 렌더."""
+        """프로젝트가 바뀔 때마다 호출. 영상에 영향이 있으면 디바운스 후 렌더 (hold 중이면 나중에)."""
         if not self.enabled:
+            return
+        if self.hold:
             return
         k = self.key_fn()
         if k == self.rendered_key and not self.rendering:
@@ -83,7 +100,7 @@ class AutoPreview(QObject):
         if self.pending:
             self.pending = False
             self.request(force=True)
-        elif ok and self.enabled and self.key_fn() != self.rendered_key:
+        elif ok and self.enabled and not self.hold and self.key_fn() != self.rendered_key:
             self.timer.start()
         self.state_changed.emit(self.state())
 

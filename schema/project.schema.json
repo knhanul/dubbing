@@ -603,6 +603,22 @@
             },
             "additionalProperties": false
           }
+        },
+        "notes": {
+          "description": "녹음본(파일)별 이름·★ 표시. 키 = 프로젝트 기준 파일 경로 (takes/line_0001_v2.wav)",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "star": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false

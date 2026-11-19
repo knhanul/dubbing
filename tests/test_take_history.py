@@ -79,7 +79,7 @@ def test_history_list_use_play_delete(win, monkeypatch):
     w.model.select("take", 0)
     assert w.inspector.stack.currentWidget() is tp and tp.history.isVisibleTo(w.inspector)
     rows = tp.history_rows
-    assert [r["version"].version for r in rows] == [1, 2, 3] and tp.history.title() == "🎞 녹음 기록 (3개)"
+    assert [r["version"].version for r in rows] == [1, 2, 3] and tp.history.title() == "녹음본 3개 — 하나를 골라 쓰세요"
     assert rows[1]["label"].text().startswith("✔ v2") and "2.0초" in rows[1]["label"].text() and "지금 사용" in rows[1]["label"].text()
     assert not rows[1]["use"].isEnabled() and not rows[1]["delete"].isEnabled()
     assert rows[0]["use"].isEnabled() and rows[0]["delete"].isEnabled()
@@ -120,7 +120,7 @@ def test_record_tab_shows_count_and_lock(win):
     tbl = w.dub.table
     w.dub.refresh_table()
     texts = {tbl.item(r, 0).text(): tbl.item(r, 5).text() for r in range(tbl.rowCount())}
-    assert texts == {"1": "", "2": "✔ 3개"}
+    assert texts == {"1": "", "2": "✔ 3개 ▾"}
     # 잠그면 녹음 기록도 못 바꿈
     w.timeline.header.buttons[("dubbing", "locked")].click()
     w.model.select("take", 0)
