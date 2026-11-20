@@ -919,7 +919,8 @@ class MainWindow(QMainWindow):
     def show_output_tab(self):
         self.right.setCurrentWidget(self.output_scroll)
 
-    def show_style_tab(self):
+    def show_style_tab(self, scope: str = "all"):
+        self.style_panel.set_scope(scope)
         self.right.setCurrentWidget(self.sub_scroll)
         self.style_panel.sample.replay()
 
@@ -929,7 +930,7 @@ class MainWindow(QMainWindow):
         c = self.model.cue_timeline.current(t)
         if not c:
             return None
-        return c.text, t - c.start, c.end - t, c.end - c.start
+        return c.text, t - c.start, c.end - t, c.end - c.start, c.style
 
     def _subtitle_at(self, t: float) -> str:
         if self.model.project.tracks.subtitle.hidden:

@@ -89,7 +89,7 @@ def split_cue(project: Project, index: int, t: float, cursor: Optional[int] = No
     a, b = split_text(it.text.replace("\n", " "), (lt - it.start) / (it.end - it.start), cursor)
     if not a or not b:
         a, b = it.text, it.text  # 한 글자짜리면 같은 글로
-    new = SubtitleItem(0, round(lt, 3), it.end, b)
+    new = SubtitleItem(0, round(lt, 3), it.end, b, dict(it.style) if it.style else None)  # 나눈 뒤쪽도 같은 모양
     it.end, it.text = round(lt, 3), a
     items = list(items) + [new]
     _renumber(project, items)

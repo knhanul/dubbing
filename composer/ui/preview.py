@@ -38,7 +38,8 @@ class _View(QGraphicsView):
         self.empty_hint = ""
         # 자막 스타일·효과 (실시간 근사)
         from ..schema import SubtitleStyle
-        self.style = SubtitleStyle()
+        self.style = SubtitleStyle()  # 전체 모양
+        self.cue_style = None  # 지금 자막만 다르게 한 칸(dict) | None
         self.out_h = 1080
         self.cue_elapsed = 99.0
         self.cue_remaining = 99.0
@@ -48,6 +49,11 @@ class _View(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setBackgroundBrush(QColor("#000000"))
         self.setFrameShape(QGraphicsView.NoFrame)
+
+    def look(self):
+        """지금 그리는 자막의 실제 모양(전체 모양 + 이 자막만 다르게 한 칸)."""
+        from ..subtitle_style import effective_style
+        return effective_style(self.style, self.cue_style)
 
     def drawForeground(self, painter: QPainter, rect):
         painter.save()
@@ -59,8 +65,9 @@ class _View(QGraphicsView):
 
             frame = self.mapFromScene(self.sceneRect()).boundingRect()
             frame = QRectF(frame).intersected(QRectF(0, 0, vw, vh)) or QRectF(0, 0, vw, vh)
-            st = appear_state(self.style, self.text, self.cue_elapsed, self.cue_remaining, self.cue_duration)
-            paint_subtitle(painter, frame, self.text, self.style, self.out_h, st)
+            look = self.look()
+            st = appear_state(look, self.text, self.cue_elapsed, self.cue_remaining, self.cue_duration)
+            paint_subtitle(painter, frame, self.text, look, self.out_h, st)
         if self.empty_hint:
             f = QFont(self.font())
             f.setPixelSize(max(14, int(vh * 0.04)))
@@ -125,7 +132,7 @@ class PreviewPlayer(QWidget):
         self.view = _View(self.scene)
         self.media_path: Optional[Path] = None
         self.subtitle_fn = None  # t -> str
-        self.cue_fn = None  # t -> (text, 나타난 뒤 초, 사라지기까지 초, 길이) | None  (있으면 subtitle_fn 대신)
+        self.cue_fn = None  # t -> (text, 나타난 뒤 초, 사라지기까지 초, 길이[, 이 자막만의 모양]) | None  (있으면 subtitle_fn 대신)
         self._base_volume = 1.0
         self._track_gain = 1.0  # 🔇/S (클립 원본 소리 트랙)
         self._raw_ms, self._raw_at = -1, 0.0
@@ -387,11 +394,15 @@ class PreviewPlayer(QWidget):
         v = self.view
         if self.cue_fn is not None:
             info = self.cue_fn(t)
-            text, el, rem, dur = info if info else ("", 99.0, 99.0, 99.0)
-            animating = bool(text) and v.style.appear != "none" and (el < max(v.style.appear_duration, 0.05) + 0.1
-                                                                       or (v.style.appear == "typing" and el < dur)
-                                                                       or (v.style.appear == "fade" and rem < 0.2))
-            changed = text != v.text or animating or (v.cue_elapsed < 1.5 and el >= 1.5)
+            text, el, rem, dur = info[:4] if info else ("", 99.0, 99.0, 99.0)
+            cue_style = info[4] if info and len(info) > 4 else None
+            restyled = cue_style != v.cue_style
+            v.cue_style = cue_style
+            lk = v.look()
+            animating = bool(text) and lk.appear != "none" and (el < max(lk.appear_duration, 0.05) + 0.1
+                                                                or (lk.appear == "typing" and el < dur)
+                                                                or (lk.appear == "fade" and rem < 0.2))
+            changed = text != v.text or restyled or animating or (v.cue_elapsed < 1.5 and el >= 1.5)
             v.cue_elapsed, v.cue_remaining, v.cue_duration = el, rem, dur
         else:
             text = self.subtitle_fn(t) if self.subtitle_fn else ""
