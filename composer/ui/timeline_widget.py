@@ -1,6 +1,8 @@
 """타임라인: 클립/자막/더빙/BGM 트랙 표시와 마우스 미세 조정.
 
 * 클릭: 선택 + 재생 위치 이동(눈금 영역)
+* 여러 개 고르기(같은 트랙끼리): Ctrl+클릭 = 더하기/빼기 · Shift+클릭 = 범위 · 빈 곳에서 끌기 = 상자로 고르기
+  (고른 것 중 하나를 끌면 함께 이동 — 클립은 묶어서 순서 이동)
 * 클립 끌기: 순서 바꾸기 / 클립 오른쪽 끝 끌기: 길이 조절
 * 자막 끌기: 이동 / 자막 양 끝 끌기: 시작·끝 조절
 * 더빙 테이크·BGM 끌기: 위치 이동
@@ -27,6 +29,14 @@ TRACKS = [("clip", "클립", 54), ("subtitle", "자막", 38), ("take", "더빙",
 LABEL_W = 8  # 캔버스 왼쪽 여백 (트랙 이름·단추는 TrackHeader 에)
 HEADER_W = 152
 EDGE = 6
+
+
+KIND_NAMES = {"clip": "클립", "subtitle": "자막", "take": "더빙", "transition": "전환", "bgm": "배경음악"}
+
+
+def selection_text(sel) -> str:
+    """'자막 3개 고름' (여러 개 골랐을 때 타임라인 오른쪽 위에 표시)."""
+    return f"{KIND_NAMES.get(sel.kind, '')} {sel.count}개 고름"
 
 
 def snap(v: float, fine: bool) -> float:
@@ -66,6 +76,8 @@ class TimelineCanvas(QWidget):
         self.tool = "select"  # "select" ↖ 선택 / "razor" ✂ 누른 곳을 자름
         self.magnet = True  # 🧲 클립 끝·재생 위치·자막 경계·In/Out 에 붙기 (Shift = 끔)
         self._razor_x: Optional[float] = None
+        self._skip: set = set()  # 함께 끌고 있는 항목 (자석이 서로에게 붙지 않게) {(kind, index)}
+        self.marquee: Optional[QRectF] = None  # 끌어서 고르기 상자
         self.setAcceptDrops(True)
         model.changed.connect(self._relayout)
         model.selection_changed.connect(self.update)
@@ -121,10 +133,10 @@ class TimelineCanvas(QWidget):
                 break
             ts += [c.start, c.end]
         for it in m.cues:
-            if not (skip_kind == "subtitle" and it.index == skip_index):
+            if not (skip_kind == "subtitle" and it.index == skip_index) and ("subtitle", it.index) not in self._skip:
                 ts += [it.start, it.end]
         for k, (_, _, r) in enumerate(x for x in self._items() if x[0] == "take"):
-            if not (skip_kind == "take" and k == skip_index):
+            if not (skip_kind == "take" and k == skip_index) and ("take", k) not in self._skip:
                 ts += [self.t_of(r.left()), self.t_of(r.right())]
         ts += [t for t in (self.mark_in, self.mark_out) if t is not None]
         return ts
@@ -329,7 +341,7 @@ class TimelineCanvas(QWidget):
             if kind == "transition":
                 continue
             p.setOpacity(0.32 if dimmed(pr, KIND_TRACK[kind]) else 1.0)
-            selected = sel.kind == kind and sel.index == idx
+            selected = sel.has(kind, idx)
             base = QColor(colors[kind])
             if kind == "clip" and m.project.clips[idx].type == "image":
                 base = QColor("#4b7f9c")
@@ -449,6 +461,22 @@ class TimelineCanvas(QWidget):
             p.drawRoundedRect(r, 4, 4)
             p.setPen(QColor("#c6dafc"))
             p.drawText(r, Qt.AlignCenter, text)
+        if self.marquee is not None:  # 끌어서 고르기 상자
+            p.setPen(QPen(QColor("#8ab4f8"), 1, Qt.DashLine))
+            p.setBrush(QColor(138, 180, 248, 40))
+            p.drawRect(self.marquee)
+        if m.selection.count > 1:  # 몇 개 골랐는지 (눈금자 오른쪽)
+            f6 = QFont(self.font()); f6.setPointSizeF(8); f6.setBold(True)
+            p.setFont(f6)
+            text = selection_text(m.selection)
+            vis = self.visibleRegion().boundingRect()
+            tw = p.fontMetrics().horizontalAdvance(text) + 14
+            box = QRectF(vis.right() - tw - 6, 3, tw, RULER_H - 6)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(26, 115, 232, 220))
+            p.drawRoundedRect(box, 4, 4)
+            p.setPen(QColor("#ffffff"))
+            p.drawText(box, Qt.AlignCenter, text)
         # ✂ 자르기 도구: 마우스 위치에 자를 선
         if self.tool == "razor" and self._razor_x is not None:
             p.setPen(QPen(QColor("#ffd54f"), 1, Qt.DashLine))
@@ -472,7 +500,7 @@ class TimelineCanvas(QWidget):
             if kind != "transition":
                 continue
             tr = m.timeline.clips[idx].transition_in
-            sel = m.selection.kind == "transition" and m.selection.index == idx
+            sel = m.selection.has("transition", idx)
             p.setBrush(QColor("#f1f3f4") if sel else QColor("#c7cbd1"))
             p.setPen(QPen(QColor("#ffd54f") if sel else QColor("#5f6368"), 2 if sel else 1))
             p.drawRoundedRect(rect, 3, 3)
@@ -502,17 +530,68 @@ class TimelineCanvas(QWidget):
             else:
                 self.seek_requested.emit(self.t_of(pos.x()))
             return
+        mods = ev.modifiers()
+        ctrl, shift = bool(mods & Qt.ControlModifier), bool(mods & Qt.ShiftModifier)
         if hit is None:
-            self.seek_requested.emit(self.t_of(pos.x()))
-            self.model.select("")
+            # 빈 곳: 재생 위치 이동 + 그 트랙에서 끌어서 고르기 (Ctrl/Shift = 지금 고른 것에 더하기)
+            track = self.track_at(pos.y())
+            sel = self.model.selection
+            keep = (ctrl or shift) and bool(sel.kind) and sel.kind == track
+            if not keep:
+                self.seek_requested.emit(self.t_of(pos.x()))
+                self.model.select("")
+            if track in ("clip", "subtitle", "take"):
+                self._drag = {"kind": "marquee", "track": track, "x0": pos.x(),
+                              "base": sel.indices if keep else [], "moved": False}
             return
-        self.model.select(hit.kind, hit.index)
-        if locked(self.model.project, hit.kind):  # 🔒 고르기만 되고 끌기는 안 됨
+        sel = self.model.selection
+        collapse = False
+        range_from = None
+        if ctrl and hit.part == "body":  # Ctrl+클릭: 더하기/빼기 (끌기 없음)
+            self.model.toggle_select(hit.kind, hit.index)
             self._drag = {"kind": "locked"}
+            return
+        if shift and hit.part == "body" and sel.kind == hit.kind and not sel.has(hit.kind, hit.index):
+            # Shift+클릭: 범위 — 끌지 않고 놓을 때 (Shift+끌기는 원래대로 그 항목만 0.01초 단위 이동)
+            range_from = (sel.kind, sel.indices, sel.index)
+            self.model.select(hit.kind, hit.index)
+        elif sel.has(hit.kind, hit.index) and sel.count > 1 and hit.part == "body":
+            # 고른 것 중 하나를 누름: 함께 끌 수 있게 그대로 두고, 끌지 않고 놓으면 그것 하나만 고름
+            self.model.select_many(hit.kind, sel.indices, hit.index)
+            collapse = not shift
+        else:
+            self.model.select(hit.kind, hit.index)
+        if locked(self.model.project, hit.kind):  # 🔒 고르기만 되고 끌기는 안 됨
+            self._drag = {"kind": "locked", "collapse": collapse, "hit": hit, "range_from": range_from}
             QToolTip.showText(ev.globalPosition().toPoint(), "🔒 잠긴 트랙입니다 — 왼쪽 트랙 머리의 🔒 를 눌러 풀 수 있습니다", self)
             return
+        group = []
+        if hit.part == "body" and hit.kind in ("subtitle", "take", "clip"):
+            group = [i for i in self.model.selection.indices if i != hit.index]
         self._drag = {"kind": hit.kind, "index": hit.index, "part": hit.part, "x0": pos.x(), "moved": False,
-                      "orig": self._orig_values(hit)}
+                      "orig": self._orig_values(hit), "collapse": collapse, "hit": hit, "range_from": range_from,
+                      "group": {i: self._orig_values(Hit(hit.kind, i, "body")) for i in group}}
+        self._skip = {(hit.kind, i) for i in group}
+
+    def track_at(self, y: float) -> Optional[str]:
+        for kind, _, _ in TRACKS:
+            r = self.track_rect(kind)
+            if r.top() <= y < r.bottom():
+                return kind
+        return None
+
+    def _update_marquee(self, d: dict, pos: QPointF):
+        """끌어서 고르기: 시작한 트랙에서 상자에 걸친 항목을 모두 (Ctrl/Shift 로 시작하면 원래 고른 것에 더함)."""
+        r = self.track_rect(d["track"])
+        x0, x1 = sorted((d["x0"], pos.x()))
+        self.marquee = QRectF(x0, r.top() + 1, max(1.0, x1 - x0), r.height() - 2)
+        hits = [i for k, i, rect in self._items() if k == d["track"] and rect.right() >= x0 and rect.left() <= x1]
+        idx = list(dict.fromkeys(d["base"] + hits))
+        if idx:
+            self.model.select_many(d["track"], idx)
+        elif self.model.selection.kind:
+            self.model.select("")
+        self.update()
 
     def _orig_values(self, hit: Hit):
         pr = self.model.project
@@ -565,6 +644,11 @@ class TimelineCanvas(QWidget):
             self.seek_requested.emit(self.t_of(pos.x()))
             return
         if d["kind"] == "locked":
+            return
+        if d["kind"] == "marquee":
+            if abs(pos.x() - d["x0"]) >= 3 or d["moved"]:
+                d["moved"] = True
+                self._update_marquee(d, pos)
             return
         dt = (pos.x() - d["x0"]) / self.pps
         if abs(pos.x() - d["x0"]) < 3 and not d["moved"]:
@@ -622,7 +706,8 @@ class TimelineCanvas(QWidget):
         elif k == "clip":
             self.setCursor(Qt.ClosedHandCursor)
             d["drop_x"] = pos.x()
-            tip = "놓으면 이 위치로 순서 이동"
+            tip = (f"놓으면 이 위치로 순서 이동 ({len(d['group']) + 1}개 묶어서)" if d["group"]
+                   else "놓으면 이 위치로 순서 이동")
         elif k == "subtitle":
             items = ensure_items(pr)
             it = next(i for i in items if i.index == d["index"])
@@ -636,11 +721,18 @@ class TimelineCanvas(QWidget):
                              it.start + 0.1)
             else:
                 off = pr.subtitle.offset
-                dd = max(dt, -o["start"])
+                floor = -min([o["start"]] + [g["start"] for g in d["group"].values()])  # 고른 것 모두 0초 밑으로 안 가게
+                dd = max(dt, floor)
                 delta, stuck = self.snap_span(o["start"] + dd + off, o["end"] + dd + off, fine, "subtitle", it.index)
-                delta = max(dd + delta, -o["start"]) if stuck else snap(dd, fine)
+                delta = max(dd + delta, floor) if stuck else max(snap(dd, fine), floor)
                 it.start, it.end = round(o["start"] + delta, 3), round(o["end"] + delta, 3)
+                for gi, g in d["group"].items():
+                    other = next((x for x in items if x.index == gi), None)
+                    if other is not None:
+                        other.start, other.end = round(g["start"] + delta, 3), round(g["end"] + delta, 3)
             tip = f"{it.start:.2f} → {it.end:.2f} ({it.end - it.start:.2f}초)"
+            if d["part"] == "body" and d["group"]:
+                tip = f"자막 {len(d['group']) + 1}개 함께 이동 {it.start - o['start']:+.2f}초"
         elif k == "take" and d["part"] in ("left", "right"):
             # 더빙 조각 끝 끌기 = 길이 조절(파일 안 들리는 구간). 옆 조각에 닿으면 멈춤 (Shift = 겹쳐도 됨)
             from ..edit_ops import take_trim_limit
@@ -673,7 +765,13 @@ class TimelineCanvas(QWidget):
             a0, b0 = o["span"]
             delta, stuck = self.snap_span(a0 + dt, b0 + dt, fine, "take", d["index"])
             t.offset = round(o["offset"] + dt + delta, 3) if stuck else snap(o["offset"] + dt, fine)
+            moved = t.offset - o["offset"]
+            for gi, g in d["group"].items():
+                if 0 <= gi < len(pr.dubbing.takes):
+                    pr.dubbing.takes[gi].offset = round(g["offset"] + moved, 3)
             tip = f"오프셋 {t.offset:+.2f}초"
+            if d["group"]:
+                tip = f"더빙 {len(d['group']) + 1}개 함께 이동 {moved:+.2f}초"
             from ..edit_ops import take_overlaps
             if d["index"] in take_overlaps(pr, self._file_len)[1]:
                 tip += ("\n⚠ 겹쳐 놓기 — 두 소리가 동시에 들립니다" if fine
@@ -705,8 +803,8 @@ class TimelineCanvas(QWidget):
         pos = QPointF(ev.pos())
         t = self.t_of(pos.x())
         hit = self.hit_test(pos) if pos.y() >= RULER_H else None
-        if hit is not None:
-            self.model.select(hit.kind, hit.index)
+        if hit is not None and not self.model.selection.has(hit.kind, hit.index):
+            self.model.select(hit.kind, hit.index)  # 고른 것 위에서 누르면 여러 개 선택 그대로
         self.context_requested.emit(ev.globalPos(), t)
 
     def set_marks(self, a: Optional[float], b: Optional[float]):
@@ -724,22 +822,38 @@ class TimelineCanvas(QWidget):
 
     def mouseReleaseEvent(self, ev):
         d, self._drag = self._drag, None
+        self._skip = set()
         self.setCursor(Qt.ArrowCursor)
+        if d and d["kind"] == "marquee":
+            self.marquee = None
+            self.update()
+            return
+        if d and d.get("collapse") and not d.get("moved"):  # 고른 것 중 하나를 그냥 누름 → 그것만
+            self.model.select(d["hit"].kind, d["hit"].index)
+        if d and d.get("range_from") and not d.get("moved"):  # Shift+클릭 → 전에 고른 것부터 여기까지
+            kind, idx, primary = d["range_from"]
+            self.model.select_many(kind, idx, primary)
+            self.model.select_range(d["hit"].kind, d["hit"].index)
         if not d or d["kind"] in ("seek", "locked") or not d.get("moved"):
             return
         if d["kind"] == "clip" and d["part"] == "body":
             t = self.t_of(d.get("drop_x", d["x0"]))
             clips = self.model.timeline.clips
-            target = sum(1 for c in clips if c.index != d["index"] and (c.start + c.duration / 2) < t)
-            src = d["index"]
-            if target != src:
-                pr = self.model.project
-                clip = pr.clips.pop(src)
-                pr.clips.insert(target, clip)
-                self.model.select("clip", target)
+            moving = sorted({d["index"], *d["group"]})  # 고른 클립들은 원래 순서대로 묶어서 옮김
+            target = sum(1 for c in clips if c.index not in moving and (c.start + c.duration / 2) < t)
+            pr = self.model.project
+            block = [pr.clips[i] for i in moving]
+            rest = [c for i, c in enumerate(pr.clips) if i not in moving]
+            new = rest[:target] + block + rest[target:]
+            if [id(c) for c in new] != [id(c) for c in pr.clips]:
+                pr.clips[:] = new
+                self.model.select_many("clip", range(target, target + len(block)), target + moving.index(d["index"]))
         if d["kind"] == "take" and d["part"] == "body" and not (ev.modifiers() & Qt.ShiftModifier):
             from ..edit_ops import settle_take
-            if settle_take(self.model.project, d["index"], self._file_len):
+            settled = False
+            for k in [d["index"], *sorted(d["group"])]:
+                settled = settle_take(self.model.project, k, self._file_len) or settled
+            if settled:
                 self.model.recompute()
                 self.status_requested.emit("더빙 조각이 겹쳐서 옆 조각 끝에 붙였습니다 (Shift 를 누른 채 놓으면 겹쳐 놓기)")
         self.model.commit()

@@ -13,7 +13,8 @@ from tests.media_fixtures import _ff, make_image
 @pytest.fixture
 def files(tmp_path, monkeypatch):
     QApplication.instance() or QApplication([])
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))  # 썸네일 캐시: Linux·macOS
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))  # Windows
     d = tmp_path / "m"
     make_image(d / "img1.png", 320, 180, "red")
     make_image(d / "img2.png", 320, 180, "green")

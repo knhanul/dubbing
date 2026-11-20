@@ -93,9 +93,13 @@ def test_assembly_uses_ass_file():
     p = Project.from_dict({"output": {"width": 640, "height": 360, "fps": 30},
                            "clips": [{"file": "a.png", "duration": 2}]})
     tl = build_timeline(p, lambda c: None)
-    plan = build_assembly(p, tl, [Path("c0.mkv")], RenderSettings(), Path("o.mp4"), [CUE], "subs.srt",
+    plan = build_assembly(p, tl, [Path("c0.mkv")], RenderSettings(fonts_dir=None), Path("o.mp4"), [CUE], "subs.srt",
                           ass_name="subs.ass")
     assert "subtitles=filename=subs.ass[vsub]" in plan.filter_graph and "force_style" not in plan.filter_graph
+    # Windows 기본값: 설치된 글꼴 폴더도 찾게 (드라이브 ':' 는 필터 문법에 맞게 '\:')
+    fd = build_assembly(p, tl, [Path("c0.mkv")], RenderSettings(fonts_dir="C:\\Windows\\Fonts"), Path("o.mp4"), [CUE],
+                        "subs.srt", ass_name="subs.ass")
+    assert "subtitles=filename=subs.ass:fontsdir='C\\:/Windows/Fonts'[vsub]" in fd.filter_graph
     soft = build_assembly(p, tl, [Path("c0.mkv")], RenderSettings(burn_subtitles=False), Path("o.mp4"), [CUE],
                           "subs.srt", ass_name="subs.ass")
     assert "subtitles=" not in soft.filter_graph and "mov_text" in soft.args
@@ -261,7 +265,8 @@ def _grab_view(w, style, elapsed=5.0, text="가나다라마바사"):
     w.player.set_subtitle_style(style, 360)
     v.text, v.cue_elapsed, v.cue_remaining, v.cue_duration = text, elapsed, 2.0, 3.0
     img = v.viewport().grab().toImage()
-    arr = np.frombuffer(img.constBits(), np.uint8).reshape(img.height(), img.bytesPerLine() // 4, 4)[:, :img.width()]
+    # .copy(): QImage 가 함수 끝에서 사라져도 배열이 지워진 메모리를 가리키지 않게 (예전엔 access violation)
+    arr = np.frombuffer(img.constBits(), np.uint8).reshape(img.height(), img.bytesPerLine() // 4, 4)[:, :img.width()].copy()
     b, g, r = arr[..., 0].astype(int), arr[..., 1].astype(int), arr[..., 2].astype(int)
     fr = v.mapFromScene(v.sceneRect()).boundingRect()
     arr = arr[max(0, fr.top()):fr.bottom(), max(0, fr.left()):fr.right()]  # 영상이 보이는 영역만

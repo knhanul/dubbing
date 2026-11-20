@@ -14,10 +14,28 @@ from ..subtitles import Cue, CueTimeline, project_cues
 from ..timeline import Timeline, build_timeline, take_position
 
 
+MULTI_KINDS = ("clip", "subtitle", "take", "transition")  # 여러 개 고를 수 있는 종류 (같은 종류끼리만)
+
+
 @dataclass
 class Selection:
-    kind: str = ""  # "" | clip | subtitle | take | bgm
-    index: int = -1  # clip index / subtitle index(자막 번호) / take list index
+    kind: str = ""  # "" | clip | subtitle | take | bgm | transition
+    index: int = -1  # 기준(마지막에 고른) 항목: clip index / subtitle index(자막 번호) / take list index
+    extra: tuple = ()  # 같은 종류로 함께 고른 다른 항목들 (Ctrl/Shift+클릭 · 끌어서 고르기 · Ctrl+A)
+
+    @property
+    def indices(self) -> list[int]:
+        """고른 항목 전부(기준 항목 포함), 작은 번호부터."""
+        if not self.kind:
+            return []
+        return sorted({self.index, *self.extra})
+
+    @property
+    def count(self) -> int:
+        return len(self.indices)
+
+    def has(self, kind: str, index: int) -> bool:
+        return kind == self.kind and (index == self.index or index in self.extra)
 
 
 class ProjectModel(QObject):
@@ -131,6 +149,7 @@ class ProjectModel(QObject):
         self.revision += 1
         self._set_dirty(True)
         self.recompute()
+        self._prune_selection()
         self.changed.emit()
         self.selection_changed.emit()
 
@@ -146,6 +165,7 @@ class ProjectModel(QObject):
         self.revision += 1
         self._set_dirty(True)
         self.recompute()
+        self._prune_selection()
         self.changed.emit()
         self.selection_changed.emit()
 
@@ -194,6 +214,81 @@ class ProjectModel(QObject):
     def select(self, kind: str, index: int = -1) -> None:
         self.selection = Selection(kind, index)
         self.selection_changed.emit()
+
+    def valid_indices(self, kind: str) -> list[int]:
+        """kind 종류 항목 번호를 타임라인 왼쪽→오른쪽 순서로 (Shift+클릭 범위·Ctrl+A 용)."""
+        if kind == "clip":
+            return [c.index for c in self.timeline.clips]
+        if kind == "transition":
+            return [c.index for c in self.timeline.clips if c.index > 0 and c.transition_in.duration > 0]
+        if kind == "subtitle":
+            return [c.index for c in sorted(self.cues, key=lambda c: (c.start, c.index))]
+        if kind == "take":
+            pos = self.take_positions()
+            return sorted(range(len(pos)), key=lambda i: (pos[i], i))
+        return []
+
+    def select_many(self, kind: str, indices, primary: Optional[int] = None) -> None:
+        """같은 종류 여러 개를 고릅니다. primary(기준 항목 = 속성 탭에 보이는 것)가 없으면 마지막 것."""
+        idx = list(dict.fromkeys(int(i) for i in indices))
+        if not kind or not idx:
+            self.select("")
+            return
+        if kind not in MULTI_KINDS:
+            idx = idx[-1:]
+        p = primary if primary in idx else idx[-1]
+        self.selection = Selection(kind, p, tuple(i for i in idx if i != p))
+        self.selection_changed.emit()
+
+    def toggle_select(self, kind: str, index: int) -> None:
+        """Ctrl+클릭: 같은 종류면 더하거나 빼고, 다른 종류면 새로 고름."""
+        s = self.selection
+        if s.kind != kind or kind not in MULTI_KINDS:
+            self.select(kind, index)
+            return
+        cur = s.indices
+        if index in cur:
+            rest = [i for i in cur if i != index]
+            if not rest:
+                self.select("")
+                return
+            self.select_many(kind, rest, s.index if s.index != index else rest[-1])
+        else:
+            self.select_many(kind, cur + [index], index)
+
+    def select_range(self, kind: str, index: int) -> None:
+        """Shift+클릭: 기준 항목부터 index 까지 같은 트랙의 항목을 모두 (타임라인 순서)."""
+        s = self.selection
+        order = self.valid_indices(kind)
+        if s.kind != kind or kind not in MULTI_KINDS or s.index not in order or index not in order:
+            self.select(kind, index)
+            return
+        a, b = order.index(s.index), order.index(index)
+        lo, hi = min(a, b), max(a, b)
+        self.select_many(kind, order[lo:hi + 1], index)
+
+    def select_all(self, kind: str) -> int:
+        """한 트랙(종류)의 항목을 모두 고릅니다. 고른 개수."""
+        idx = self.valid_indices(kind)
+        if kind == "bgm" and self.project.bgm.file:
+            idx = [0]
+        if not idx:
+            return 0
+        self.select_many(kind, idx, self.selection.index if self.selection.kind == kind else None)
+        return len(idx)
+
+    def _prune_selection(self) -> None:
+        """실행 취소 등으로 없어진 항목은 선택에서 뺌."""
+        s = self.selection
+        if not s.kind:
+            return
+        if s.kind == "bgm":
+            ok = [0] if self.project.bgm.file else []
+        else:
+            valid = set(self.valid_indices(s.kind))
+            ok = [i for i in s.indices if i in valid]
+        if ok != s.indices:
+            self.selection = Selection(s.kind, s.index, tuple(i for i in ok if i != s.index)) if s.index in ok                 else (Selection(s.kind, ok[-1], tuple(ok[:-1])) if ok else Selection())
 
 
 def _rebase_paths(project: Project, old: Path, new: Path) -> None:

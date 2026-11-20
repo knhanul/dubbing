@@ -6,6 +6,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Windows 의 offscreen 화면은 글꼴을 하나도 못 찾음(글자 폭·PDF 한글·자막 그리기가 달라지거나 멈춤) → 시스템 글꼴 폴더
+if sys.platform == "win32" and "QT_QPA_FONTDIR" not in os.environ:
+    _fonts = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+    if _fonts.is_dir():
+        os.environ["QT_QPA_FONTDIR"] = str(_fonts)
 
 
 def pytest_configure(config):

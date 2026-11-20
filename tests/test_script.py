@@ -1,6 +1,4 @@
 """대본 출력: 대본 만들기(오프셋·미세 조정·녹음 상태·클립 구간·읽기 속도), PDF/DOCX/TXT 파일, 창, 메뉴."""
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -83,16 +81,23 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
-@pytest.mark.skipif(not shutil.which("pdftotext"), reason="pdftotext 필요")
 def test_pdf_has_korean_and_embedded_font(app, proj, tmp_path):
+    # 글 꺼내기는 Qt 의 PDF 읽기(QtPdf)로 — 외부 pdftotext 는 판(Git 에 딸린 xpdf 등)·인코딩에 따라 한글을 못 읽음
+    import re
+
+    from PySide6.QtPdf import QPdfDocument
+
     from composer.ui.script_dialog import korean_font, save_pdf
     s = script_from_project(proj)
     out = save_pdf(s, ScriptOptions(columns=ALL), tmp_path / "대본.pdf")
-    txt = subprocess.run(["pdftotext", "-layout", str(out), "-"], capture_output=True, text=True, check=True).stdout
+    doc = QPdfDocument()
+    assert doc.load(str(out)) == QPdfDocument.Error.None_
+    txt = "\n".join(doc.getAllText(i).text() for i in range(doc.pageCount()))
+    doc.close()
     assert "여행 브이로그" in txt and "안녕하세요, 대본 출력 테스트입니다" in txt and "00:00.7" in txt
-    fonts = subprocess.run(["pdffonts", str(out)], capture_output=True, text=True).stdout
-    lines = [l for l in fonts.splitlines()[2:] if l.strip()]
-    assert lines and all(" yes " in l for l in lines)  # 글꼴 모두 내장
+    raw = out.read_bytes()
+    n_fonts = len(re.findall(rb"/Type\s*/FontDescriptor", raw))
+    assert n_fonts and len(re.findall(rb"/FontFile[23]?\s", raw)) == n_fonts  # 글꼴 모두 내장
     assert korean_font() in ("Malgun Gothic", "맑은 고딕", "Noto Sans CJK KR", "Noto Sans KR", "Gothic A1",
                              "Nanum Gothic", "NanumGothic") or korean_font()
 

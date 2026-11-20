@@ -325,6 +325,8 @@ class MainWindow(QMainWindow):
             "[ / ] : 선택한 자막·테이크·배경음악을 0.1초 앞당기기/늦추기 (Shift = 0.01초)",
             "V : ↖ 선택 도구   C : ✂ 자르기 도구(누른 곳을 자름)   Esc : 선택 도구로 / In·Out 지우기",
             "Ctrl+K : 재생 위치에서 자르기   I / O : 구간 In / Out   Delete : 고른 항목 삭제(클립은 뒤가 당겨짐)",
+            "여러 개 고르기(같은 트랙끼리): Ctrl+클릭 = 더하기/빼기 · Shift+클릭 = 범위 · 빈 곳에서 끌기 = 상자 · "
+            "Ctrl+A = 고른 트랙(없으면 클립) 모두 — 끌기 · [ ] · Delete 가 모두에 적용",
             "Ctrl+= / Ctrl+- / Ctrl+0 : 타임라인 확대 / 축소 / 전체 보기",
             "Home : 처음으로", "F5 : 미리보기 새로 만들기 (보통은 자동)", "Ctrl+E : 영상 내보내기", "Ctrl+P : 대본 출력",
             "Ctrl+Z / Ctrl+Y : 실행 취소 / 다시 실행", "Ctrl+S : 저장",
@@ -360,6 +362,12 @@ class MainWindow(QMainWindow):
             return True
         if k == Qt.Key_Delete:
             return self.delete_selected()
+        if k == Qt.Key_A and ctrl and not shift:
+            from PySide6.QtWidgets import QAbstractItemView
+            if isinstance(QApplication.focusWidget(), QAbstractItemView):
+                return False  # 표(목록) 안에서는 표의 '모두 고르기'
+            self.select_track_all(self.model.selection.kind or "clip")
+            return True
         if k == Qt.Key_V and not ctrl and not shift:
             self.set_tool("select")
             return True
@@ -696,11 +704,24 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"✂ {name}을(를) {fmt_time(t)}에서 둘로 나눴습니다 (Ctrl+Z 로 되돌리기)", 5000)
         return True
 
+    def select_track_all(self, kind: str) -> int:
+        """한 트랙의 항목을 모두 고릅니다 (Ctrl+A · 오른쪽 클릭 메뉴)."""
+        from .timeline_widget import KIND_NAMES
+        if kind == "transition":
+            kind = "transition" if self.model.valid_indices("transition") else "clip"
+        n = self.model.select_all(kind)
+        name = KIND_NAMES.get(kind, "")
+        self.statusBar().showMessage(f"{name} {n}개를 모두 골랐습니다 — 끌기·[ ]·Delete 가 모두에 적용됩니다" if n
+                                     else f"{name} 트랙에 고를 항목이 없습니다", 5000)
+        return n
+
     def delete_selected(self) -> bool:
-        """🗑 삭제 (Delete): 고른 조각 지우기. 클립은 리플 삭제(뒤가 당겨 붙음)."""
+        """🗑 삭제 (Delete): 고른 조각 지우기. 클립은 리플 삭제(뒤가 당겨 붙음). 여러 개면 한꺼번에(되돌리기 한 번)."""
         kind = self.model.selection.kind
         if kind in ("clip", "subtitle", "take", "bgm", "transition") and self._locked_msg(kind):
             return True
+        if self.model.selection.count > 1:
+            return self._delete_many()
         if kind == "clip":
             self.inspector.clip_page._delete()
             self.statusBar().showMessage("클립을 지우고 뒤 클립을 당겨 붙였습니다 (Ctrl+Z 로 되돌리기)", 5000)
@@ -724,6 +745,38 @@ class MainWindow(QMainWindow):
         if kind == "":
             self.statusBar().showMessage("지울 항목을 먼저 타임라인에서 고르세요", 4000)
         return False
+
+    def _delete_many(self) -> bool:
+        from ..schema import Transition
+        from ..subtitles import detach_takes, ensure_items
+        s = self.model.selection
+        kind, idx = s.kind, s.indices
+
+        def fn(p):
+            if kind == "clip":
+                for i in sorted(idx, reverse=True):
+                    if 0 <= i < len(p.clips):
+                        del p.clips[i]
+            elif kind == "subtitle":
+                gone = set(idx)
+                detach_takes(p, gone)
+                p.subtitle.items = [x for x in ensure_items(p) if x.index not in gone]
+            elif kind == "take":
+                for i in sorted(idx, reverse=True):
+                    if 0 <= i < len(p.dubbing.takes):
+                        p.dubbing.takes.pop(i)
+            elif kind == "transition":
+                for i in idx:
+                    if 0 < i < len(p.clips):
+                        p.clips[i].transition = Transition("none", 0.0)
+        self.model.edit(fn)
+        self.model.select("")
+        msg = {"clip": f"클립 {len(idx)}개를 지우고 뒤 클립을 당겨 붙였습니다",
+               "subtitle": f"자막 {len(idx)}줄을 지웠습니다",
+               "take": f"더빙 조각 {len(idx)}개를 지웠습니다 (원본 파일은 그대로)",
+               "transition": f"전환 {len(idx)}개를 없앴습니다"}.get(kind, "지웠습니다")
+        self.statusBar().showMessage(f"🗑 {msg} (Ctrl+Z 로 되돌리기)", 5000)
+        return True
 
     def set_mark_in(self, t: Optional[float] = None):
         c = self.timeline.canvas
@@ -777,7 +830,11 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QMenu
         m = QMenu(self)
         m.addAction(f"✂ 여기서 자르기 ({fmt_time(t)})", lambda: self.cut_at(t))
-        m.addAction("🗑 삭제", self.delete_selected).setEnabled(bool(self.model.selection.kind))
+        sel = self.model.selection
+        m.addAction(f"🗑 삭제 ({sel.count}개)" if sel.count > 1 else "🗑 삭제", self.delete_selected).setEnabled(bool(sel.kind))
+        kind = sel.kind if sel.kind in ("clip", "subtitle", "take") else "clip"
+        from .timeline_widget import KIND_NAMES
+        m.addAction(f"☑ {KIND_NAMES[kind]} 모두 고르기 (Ctrl+A)", lambda: self.select_track_all(kind))
         m.addSeparator()
         m.addAction("[ 여기를 In 으로", lambda: self.set_mark_in(t))
         m.addAction("여기를 Out 으로 ]", lambda: self.set_mark_out(t))
@@ -839,14 +896,22 @@ class MainWindow(QMainWindow):
     def nudge_selected(self, d: float):
         from ..subtitles import move_item
 
+        from ..subtitles import ensure_items
+
         s = self.model.selection
         if self._locked_msg(s.kind):
             return
         if s.kind == "subtitle":
-            self.model.edit(lambda p: move_item(p, s.index, d), "nudge")
+            def fn(p):
+                its = [x for x in ensure_items(p) if x.index in s.indices]
+                dd = max(d, -min((x.start for x in its), default=0.0))  # 함께 고른 것 모두 0초 밑으로 안 가게
+                for x in its:
+                    move_item(p, x.index, dd)
+            self.model.edit(fn, "nudge")
         elif s.kind == "take":
-            t = self.model.project.dubbing.takes[s.index]
-            self.model.edit(lambda p: setattr(t, "offset", round(t.offset + d, 3)), "nudge")
+            takes = self.model.project.dubbing.takes
+            idx = [i for i in s.indices if 0 <= i < len(takes)]
+            self.model.edit(lambda p: [setattr(takes[i], "offset", round(takes[i].offset + d, 3)) for i in idx], "nudge")
         elif s.kind == "bgm":
             self.model.edit(lambda p: setattr(p.bgm, "start_offset", max(0.0, round(p.bgm.start_offset + d, 3))), "nudge")
 
@@ -1047,6 +1112,10 @@ class MainWindow(QMainWindow):
 
     def _on_selection(self):
         s = self.model.selection
+        if s.count > 1:
+            from .timeline_widget import selection_text
+            self.statusBar().showMessage(f"{selection_text(s)} — 끌기 · [ ] · Delete 가 모두에 적용됩니다 "
+                                         "(속성 탭은 마지막에 고른 것)", 4000)
         # 고르면 🛠 속성 탭으로. 단 녹음 탭에서 자막·더빙을 고를 때는 녹음 흐름을 지키려고 그대로
         recording_tab = self.right.currentWidget() is self.dub_scroll
         effects_tab = self.right.currentWidget() is self.effects_scroll
@@ -1054,7 +1123,7 @@ class MainWindow(QMainWindow):
             pass  # ✨ 효과 탭에서 다른 클립을 고르면 효과 탭 그대로 (그 클립 효과로)
         elif s.kind in ("clip", "transition", "bgm") or (s.kind in ("subtitle", "take") and not recording_tab):
             self.right.setCurrentWidget(self.inspector)
-        if s.kind == "clip" and 0 <= s.index < len(self.model.timeline.clips) and not self.player.is_playing():
+        if s.kind == "clip" and s.count == 1 and 0 <= s.index < len(self.model.timeline.clips) and not self.player.is_playing():
             self.player.seek(self.model.timeline.clips[s.index].start)
 
     def _direct_source(self) -> Optional[Path]:
