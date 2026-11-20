@@ -190,6 +190,30 @@ def _transition(v: _V, tr, path):
     v.num(tr, "duration", path, 0, 10)
 
 
+STYLE_KEYS = {"font", "size", "color", "outline_color", "outline", "bold", "margin_v", "position",
+              "box", "box_color", "box_opacity", "box_padding", "appear", "appear_duration"}
+
+
+def _check_style(v, sty: dict, sp: str) -> None:
+    """subtitle.style 또는 subtitle.items[i].style (자막 모양) 검사."""
+    v.unknown(sty, STYLE_KEYS, sp)
+    v.num(sty, "size", sp, 8, 300)
+    v.num(sty, "outline", sp, 0, 20)
+    v.num(sty, "margin_v", sp, 0, 2000)
+    v.num(sty, "box_opacity", sp, 0, 1)
+    v.num(sty, "box_padding", sp, 0, 200)
+    v.num(sty, "appear_duration", sp, 0, 5)
+    v.enum(sty, "position", sp, ["bottom", "center", "top"])
+    v.enum(sty, "appear", sp, ["none", "fade", "typing", "slide_up", "pop"])
+    v.boolean(sty, "bold", sp)
+    v.boolean(sty, "box", sp)
+    for ck in ("color", "outline_color", "box_color"):
+        if ck in sty and not re.fullmatch(r"#[0-9A-Fa-f]{6}", str(sty[ck])):
+            v.err(f"{sp}.{ck}", "#RRGGBB 형식의 색이어야 합니다. 예: \"#FFFFFF\"")
+    if "font" in sty and (not isinstance(sty["font"], str) or not sty["font"].strip()):
+        v.err(f"{sp}.font", "글꼴 이름(문자열)이어야 합니다. 예: \"Malgun Gothic\"")
+
+
 def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issue]:
     """문제 목록을 돌려줍니다. severity == 'error' 가 없으면 렌더 가능."""
     v = _V()
@@ -284,25 +308,7 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
             v.num(st, "offset", "subtitle", -3600, 3600)
             v.boolean(st, "burn_in", "subtitle")
             if isinstance(st.get("style"), dict):
-                sty = st["style"]
-                sp = "subtitle.style"
-                v.unknown(sty, {"font", "size", "color", "outline_color", "outline", "bold", "margin_v", "position",
-                                "box", "box_color", "box_opacity", "box_padding", "appear", "appear_duration"}, sp)
-                v.num(sty, "size", sp, 8, 300)
-                v.num(sty, "outline", sp, 0, 20)
-                v.num(sty, "margin_v", sp, 0, 2000)
-                v.num(sty, "box_opacity", sp, 0, 1)
-                v.num(sty, "box_padding", sp, 0, 200)
-                v.num(sty, "appear_duration", sp, 0, 5)
-                v.enum(sty, "position", sp, ["bottom", "center", "top"])
-                v.enum(sty, "appear", sp, ["none", "fade", "typing", "slide_up", "pop"])
-                v.boolean(sty, "bold", sp)
-                v.boolean(sty, "box", sp)
-                for ck in ("color", "outline_color", "box_color"):
-                    if ck in sty and not re.fullmatch(r"#[0-9A-Fa-f]{6}", str(sty[ck])):
-                        v.err(f"{sp}.{ck}", "#RRGGBB 형식의 색이어야 합니다. 예: \"#FFFFFF\"")
-                if "font" in sty and (not isinstance(sty["font"], str) or not sty["font"].strip()):
-                    v.err(f"{sp}.font", "글꼴 이름(문자열)이어야 합니다. 예: \"Malgun Gothic\"")
+                _check_style(v, st["style"], "subtitle.style")
             if isinstance(st.get("items"), list):
                 for j, it in enumerate(st["items"]):
                     pp = f"subtitle.items[{j}]"
@@ -313,6 +319,11 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
                     e = v.num(it, "end", pp, 0, required=True)
                     if _is_num(s) and _is_num(e) and e <= s:
                         v.err(pp, "end 는 start 보다 커야 합니다.")
+                    if it.get("style") is not None:  # 이 자막만 다른 모양 (바꾼 칸만)
+                        if isinstance(it["style"], dict):
+                            _check_style(v, it["style"], f"{pp}.style")
+                        else:
+                            v.err(f"{pp}.style", "객체여야 합니다. 예: {\"color\": \"#FFD400\"}")
 
     bgm = data.get("bgm")
     if bgm is not None:

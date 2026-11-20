@@ -1,5 +1,7 @@
 """'🅰 자막 스타일' 탭: 글꼴·색·배경 상자·위치·나타나기 효과.
 
+맨 위 '적용 대상'으로 **모든 자막**(subtitle.style) 또는 **타임라인에서 고른 자막만**(subtitle.items[].style 에
+전체와 다른 칸만 기록)을 고칩니다. 고른 자막만 바꾼 칸은 전체 모양을 바꿔도 그대로 남습니다.
 값을 바꾸면 곧바로 프로젝트 JSON(subtitle.style)에 기록되고 미리보기 화면 위 자막에 즉시 반영됩니다
 (미리보기 영상을 다시 렌더하지 않음). 영상 내보내기에서는 같은 설정으로 ASS 자막을 만들어 영상에 새깁니다.
 """
@@ -20,7 +22,9 @@ from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDoubleSpinBo
 
 from ..schema import SubtitleStyle
 from ..subtitle_presets import Preset, PresetError, PresetStore, preset_from_style, style_from_preset
-from ..subtitle_style import APPEAR_LABELS, POSITION_LABELS, appear_state
+from ..subtitle_style import (APPEAR_LABELS, POSITION_LABELS, appear_state, describe_override, effective_style,
+                              override_from_style, set_override)
+from ..subtitles import ensure_items
 from .model import ProjectModel
 from .sub_paint import paint_subtitle
 
@@ -142,6 +146,25 @@ class SubtitleStylePanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(10)
 
+        # --- 적용 대상: 모든 자막 / 고른 자막만 ---
+        self.scope = "all"
+        g_scope = Section("적용 대상")
+        self.btn_scope_all = QPushButton("모든 자막")
+        self.btn_scope_sel = QPushButton("고른 자막만")
+        for b, tip in ((self.btn_scope_all, "바꾸면 모든 자막의 기본 모양이 바뀝니다"),
+                       (self.btn_scope_sel, "타임라인에서 고른 자막만 다르게 (Ctrl+클릭으로 여러 개)")):
+            b.setCheckable(True)
+            b.setToolTip(tip)
+        self.btn_scope_all.setChecked(True)
+        g_scope.row(self.btn_scope_all, self.btn_scope_sel)
+        self.scope_info = QLabel()
+        self.scope_info.setWordWrap(True)
+        self.scope_info.setStyleSheet(DIM + "font-size:11px;")
+        g_scope.add(self.scope_info)
+        self.btn_clear_item = g_scope.add_link("전체 모양으로 되돌리기",
+                                               tip="고른 자막만 다르게 한 칸을 모두 지우고 전체 모양을 따르게 (Ctrl+Z 로 되돌리기)")
+        outer.addWidget(g_scope)
+
         # --- 모양 고르기 (스타일 모음, 3열) ---
         g_pre = Section("모양 고르기")
         g_pre.setToolTip("누르면 바로 적용 (Ctrl+Z 로 되돌리기)")
@@ -246,17 +269,79 @@ class SubtitleStylePanel(QWidget):
         self._connect()
         self._apply_writing_system()
         model.changed.connect(self.refresh)
+        model.selection_changed.connect(self._on_selection)
         self.refresh()
 
-    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------ 적용 대상
+    def selected_indices(self) -> list[int]:
+        """타임라인에서 고른 자막 번호들 (자막을 고르지 않았으면 빈 목록)."""
+        sel = self.model.selection
+        if sel.kind != "subtitle":
+            return []
+        have = {c.index for c in self.model.cues}
+        return [i for i in sel.indices if i in have]
+
+    def item_mode(self) -> bool:
+        return self.scope == "selected" and bool(self.selected_indices())
+
+    def set_scope(self, scope: str) -> None:
+        """'all' = 모든 자막, 'selected' = 고른 자막만 (고른 자막이 없으면 모든 자막)."""
+        self.scope = "selected" if scope == "selected" and self.selected_indices() else "all"
+        self.refresh()
+
+    def _on_selection(self):
+        if self.scope == "selected" and not self.selected_indices():
+            self.scope = "all"
+        self.refresh()
+
+    def _ref_cue(self):
+        """고른 자막 중 기준(마지막에 고른) 자막."""
+        idx = self.model.selection.index
+        return next((c for c in self.model.cues if c.index == idx), None)
+
     @property
-    def st(self) -> SubtitleStyle:
+    def base(self) -> SubtitleStyle:
         return self.model.project.subtitle.style
 
+    @property
+    def st(self) -> SubtitleStyle:
+        """지금 패널이 보여 주고 고치는 모양 (고른 자막만이면 기준 자막의 실제 모양)."""
+        if self.item_mode():
+            c = self._ref_cue()
+            return effective_style(self.base, c.style if c else None)
+        return self.base
+
+    def _edit_items(self, fn, key=None):
+        """고른 자막마다 fn(item, 전체 모양) — 되돌리기 한 번."""
+        idx = set(self.selected_indices())
+
+        def edit(p):
+            for it in ensure_items(p):
+                if it.index in idx:
+                    fn(it, p.subtitle.style)
+        self.model.edit(edit, merge_key=key)
+
     def _set(self, key: Optional[str], attr: str, value):
-        if self._loading or getattr(self.st, attr) == value:
+        if self._loading:
+            return
+        if self.item_mode():
+            idx = set(self.selected_indices())
+            if all(getattr(effective_style(self.base, c.style), attr) == value
+                   for c in self.model.cues if c.index in idx):
+                return
+            self._edit_items(lambda it, base: setattr(it, "style", set_override(base, it.style, attr, value)),
+                             key=("item", key, tuple(sorted(idx))) if key else None)
+            return
+        if getattr(self.st, attr) == value:
             return
         self.model.edit(lambda p: setattr(p.subtitle.style, attr, value), merge_key=key)
+
+    def clear_item_styles(self):
+        """고른 자막만 다르게 한 모양을 지워 전체 모양을 따르게."""
+        idx = set(self.selected_indices())
+        if not any(c.style for c in self.model.cues if c.index in idx):
+            return
+        self._edit_items(lambda it, base: setattr(it, "style", None))
 
     def _connect(self):
         self.font_combo.currentFontChanged.connect(lambda f: self._set("st_font", "font", f.family()))
@@ -274,6 +359,9 @@ class SubtitleStylePanel(QWidget):
         for btn, attr, title in ((self.color, "color", "글자 색"), (self.outline_color, "outline_color", "외곽선 색"),
                                  (self.box_color, "box_color", "배경 상자 색")):
             btn.clicked.connect(lambda _=False, a=attr, t=title: self._choose(a, t))
+        self.btn_scope_all.clicked.connect(lambda: self.set_scope("all"))
+        self.btn_scope_sel.clicked.connect(lambda: self.set_scope("selected"))
+        self.btn_clear_item.clicked.connect(self.clear_item_styles)
         self.btn_replay.clicked.connect(self.sample.replay)
         self.btn_reset.clicked.connect(self.reset_defaults)
         self.presets.itemClicked.connect(lambda it: self.apply_preset(it.data(NAME_ROLE)))
@@ -362,6 +450,9 @@ class SubtitleStylePanel(QWidget):
         if pr is None:
             return
         st = self.preset_style(pr)
+        if self.item_mode():  # 고른 자막에만 이 모양을 입힘
+            self._edit_items(lambda it, base: setattr(it, "style", override_from_style(base, st)))
+            return
         if st == self.st:
             return
         self.model.edit(lambda p: setattr(p.subtitle, "style", st))  # 되돌리기 한 번
@@ -445,11 +536,42 @@ class SubtitleStylePanel(QWidget):
         self.notify(f"내 모양 {len(self.store.user)}개를 저장했습니다:\n{path}")
 
     def reset_defaults(self):
+        if self.item_mode():  # 고른 자막만: 전체 모양으로
+            self.clear_item_styles()
+            return
         d = SubtitleStyle()
         self.model.edit(lambda p: setattr(p.subtitle, "style", SubtitleStyle(**asdict(d))))
 
     # ------------------------------------------------------------------
+    def _refresh_scope(self):
+        idx = self.selected_indices()
+        if self.scope == "selected" and not idx:
+            self.scope = "all"
+        item = self.scope == "selected"
+        self.btn_scope_all.setChecked(not item)
+        self.btn_scope_sel.setChecked(item)
+        self.btn_scope_sel.setEnabled(bool(idx))
+        self.btn_scope_sel.setText(f"고른 자막만 ({len(idx)}개)" if idx else "고른 자막만")
+        self.btn_reset.setText("전체 모양으로" if item else "처음 모양으로")
+        self.btn_reset.setToolTip("고른 자막을 전체 모양으로 (Ctrl+Z 로 되돌리기)" if item
+                                  else "자막 모양을 기본값으로 (Ctrl+Z 로 되돌리기)")
+        n_custom = sum(1 for c in self.model.cues if c.style)
+        if item:
+            ref = self._ref_cue()
+            diff = describe_override(ref.style if ref else None)
+            who = f"{ref.index}번 자막" if len(idx) == 1 else f"고른 자막 {len(idx)}개"
+            self.scope_info.setText(f"✨ {who}만 바꿉니다. "
+                                    + (f"전체와 다른 칸: {diff}" if diff else "지금은 전체 모양과 같습니다."))
+        elif idx:
+            self.scope_info.setText("모든 자막의 기본 모양을 바꿉니다. 고른 자막만 다르게 하려면 '고른 자막만'을 누르세요."
+                                    + (f" (따로 꾸민 자막 {n_custom}개는 바꾼 칸을 그대로 지킵니다)" if n_custom else ""))
+        else:
+            self.scope_info.setText("모든 자막의 기본 모양을 바꿉니다. 자막 하나만 다르게 하려면 타임라인에서 자막을 고르세요."
+                                    + (f" (따로 꾸민 자막 {n_custom}개는 바꾼 칸을 그대로 지킵니다)" if n_custom else ""))
+        self.btn_clear_item.setVisible(item and any(c.style for c in self.model.cues if c.index in set(idx)))
+
     def refresh(self):
+        self._refresh_scope()
         st = self.st
         p = self.model.project
         self._loading = True
@@ -483,7 +605,9 @@ class SubtitleStylePanel(QWidget):
         finally:
             self._loading = False
         cues = self.model.cues
-        self.sample.text = cues[0].text if cues else SAMPLE_TEXT  # 실제 첫 자막 문장으로 보여 줌
+        ref = self._ref_cue() if self.item_mode() else None
+        # 실제 자막 문장으로 보여 줌 (고른 자막만이면 그 자막)
+        self.sample.text = ref.text if ref else (cues[0].text if cues else SAMPLE_TEXT)
         self.sample.set_style(st, p.output.width, p.output.height)
         self.fill_presets()
         if not p.subtitle.burn_in:

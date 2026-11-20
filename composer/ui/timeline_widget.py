@@ -362,7 +362,8 @@ class TimelineCanvas(QWidget):
                     text += f"  {MOTION_LABELS.get(c.motion, c.motion)}"
             elif kind == "subtitle":
                 cue = m.cue_by_index(idx)
-                text = f"{idx}. {cue.text.replace(chr(10), ' ')}" if cue else ""
+                # ✨ = 이 자막만 다른 모양
+                text = f"{idx}.{' ✨' if cue.style else ''} {cue.text.replace(chr(10), ' ')}" if cue else ""
             elif kind == "take":
                 tk = m.project.dubbing.takes[idx]
                 text = f"🎤 {tk.subtitle if tk.subtitle is not None else '세션'}"

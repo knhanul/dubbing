@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from ..schema import Project, SubtitleStyle
-from ..subtitle_style import ASS_ALIGN, effect_duration, typing_time
+from ..subtitle_style import ASS_ALIGN, effect_duration, effective_style, typing_time
 from ..subtitles import Cue
 
 
@@ -79,21 +79,55 @@ def typing_text(text: str, style: SubtitleStyle, cue_duration: float) -> str:
     return "".join(out)
 
 
-def build_ass(project: Project, cues: list[Cue]) -> str:
-    st = project.subtitle.style
-    w, h = int(project.output.width), int(project.output.height)
+def _style_lines(name: str, st: SubtitleStyle, w: int) -> tuple[str, str]:
+    """한 모양의 ASS 스타일 두 줄 (글자 · 배경 상자)."""
     align = ASS_ALIGN.get(st.position, 2)
     bold = -1 if st.bold else 0
     ml = max(10, int(w * 0.05))
     font = (st.font or "Malgun Gothic").replace(",", " ")
+    text_style = (f"Style: {name},{font},{st.size},{ass_color(st.color)},{ass_color(st.color, 0)},"
+                  f"{ass_color(st.outline_color)},&H00000000,{bold},0,0,0,100,100,0,0,1,{st.outline:g},0,"
+                  f"{align},{ml},{ml},{st.margin_v},1")
+    box_style = (f"Style: Box{name[4:]},{font},{st.size},&HFF000000,&HFF000000,"
+                 f"{ass_color(st.box_color, st.box_opacity)},"
+                 f"&HFF000000,{bold},0,0,0,100,100,0,0,3,{st.box_padding},0,{align},{ml},{ml},{st.margin_v},1")
+    return text_style, box_style
+
+
+def build_ass(project: Project, cues: list[Cue]) -> str:
+    """자막 → ASS. 전체 모양은 Text/Box 스타일, 한 줄만 다르게 한 모양은 Text2/Box2 … 로 따로 둡니다."""
+    base = project.subtitle.style
+    w, h = int(project.output.width), int(project.output.height)
     fields = "Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, " \
              "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, " \
              "MarginL, MarginR, MarginV, Encoding"
-    text_style = (f"Style: Text,{font},{st.size},{ass_color(st.color)},{ass_color(st.color, 0)},"
-                  f"{ass_color(st.outline_color)},&H00000000,{bold},0,0,0,100,100,0,0,1,{st.outline:g},0,"
-                  f"{align},{ml},{ml},{st.margin_v},1")
-    box_style = (f"Style: Box,{font},{st.size},&HFF000000,&HFF000000,{ass_color(st.box_color, st.box_opacity)},"
-                 f"&HFF000000,{bold},0,0,0,100,100,0,0,3,{st.box_padding},0,{align},{ml},{ml},{st.margin_v},1")
+    looks: list[SubtitleStyle] = [base]  # 0 = 전체 모양
+    names: list[str] = ["Text"]
+    events = []
+    for c in cues:
+        if c.end <= c.start or not c.text.strip():
+            continue
+        st = effective_style(base, c.style)
+        if st in looks:
+            name = names[looks.index(st)]
+        else:
+            looks.append(st)
+            name = f"Text{len(looks)}"
+            names.append(name)
+        t0, t1 = ass_time(c.start), ass_time(c.end)
+        dur = c.end - c.start
+        if st.box and st.box_opacity > 0:
+            tags = effect_tags(st, c, w, h, box=True)
+            box = "Box" + name[4:]
+            events.append(f"Dialogue: 0,{t0},{t1},{box},,0,0,0,,{{{tags}}}{escape_text(c.text)}" if tags
+                          else f"Dialogue: 0,{t0},{t1},{box},,0,0,0,,{escape_text(c.text)}")
+        tags = effect_tags(st, c, w, h)
+        body = typing_text(c.text, st, dur) if st.appear == "typing" else escape_text(c.text)
+        events.append(f"Dialogue: 1,{t0},{t1},{name},,0,0,0,,{{{tags}}}{body}" if tags
+                      else f"Dialogue: 1,{t0},{t1},{name},,0,0,0,,{body}")
+    styles = []
+    for name, st in zip(names, looks):
+        styles.extend(_style_lines(name, st, w))
     lines = [
         "[Script Info]",
         "; 영상 합성기에서 만든 자막",
@@ -106,24 +140,10 @@ def build_ass(project: Project, cues: list[Cue]) -> str:
         "",
         "[V4+ Styles]",
         f"Format: {fields}",
-        text_style,
-        box_style,
+        *styles,
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+        *events,
     ]
-    use_box = st.box and st.box_opacity > 0
-    for c in cues:
-        if c.end <= c.start or not c.text.strip():
-            continue
-        t0, t1 = ass_time(c.start), ass_time(c.end)
-        dur = c.end - c.start
-        if use_box:
-            tags = effect_tags(st, c, w, h, box=True)
-            lines.append(f"Dialogue: 0,{t0},{t1},Box,,0,0,0,,{{{tags}}}{escape_text(c.text)}" if tags
-                         else f"Dialogue: 0,{t0},{t1},Box,,0,0,0,,{escape_text(c.text)}")
-        tags = effect_tags(st, c, w, h)
-        body = typing_text(c.text, st, dur) if st.appear == "typing" else escape_text(c.text)
-        lines.append(f"Dialogue: 1,{t0},{t1},Text,,0,0,0,,{{{tags}}}{body}" if tags
-                     else f"Dialogue: 1,{t0},{t1},Text,,0,0,0,,{body}")
     return "\n".join(lines) + "\n"

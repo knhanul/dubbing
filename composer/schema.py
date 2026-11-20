@@ -138,12 +138,24 @@ SUB_POSITIONS = ("bottom", "center", "top")
 SUB_APPEARS = ("none", "fade", "typing", "slide_up", "pop")
 
 
+def _style_override(d: Any) -> Optional[dict]:
+    """자막 한 줄의 모양 덮어쓰기: SubtitleStyle 칸 이름만 남김(빈 것은 None)."""
+    if not isinstance(d, dict):
+        return None
+    names = {f.name for f in fields(SubtitleStyle)}
+    out = {k: v for k, v in d.items() if k in names}
+    return out or None
+
+
 @dataclass
 class SubtitleItem:
     index: int
     start: float
     end: float
     text: str
+    # 이 자막만 다르게 할 모양 — 전체 스타일(subtitle.style)과 다른 칸만 담음. 예: {"color": "#FFD400", "size": 64}
+    # None 이면 전체 스타일을 그대로 따름.
+    style: Optional[dict] = None
 
 
 @dataclass
@@ -168,6 +180,8 @@ class SubtitleSettings:
             kw["style"] = SubtitleStyle()
         if kw.get("items") is not None:
             kw["items"] = [SubtitleItem(**_filter_kwargs(SubtitleItem, i)) for i in kw["items"]]
+            for it in kw["items"]:
+                it.style = _style_override(it.style)
         return cls(**kw)
 
 
@@ -289,6 +303,9 @@ class Project:
     def to_dict(self) -> dict:
         d = asdict(self)
         d.pop("base_dir", None)
+        for it in (d.get("subtitle") or {}).get("items") or []:
+            if not it.get("style"):
+                it.pop("style", None)  # 전체 모양을 따르는 자막은 칸을 쓰지 않음(예전 파일과 같은 모양)
         return d
 
     def to_json(self) -> str:
@@ -344,6 +361,23 @@ _transition = {
     "required": ["type"],
     "additionalProperties": False,
 }
+_STYLE_PROPS: dict = {
+    "font": {"type": "string"},
+    "size": {"type": "integer", "minimum": 8, "maximum": 300},
+    "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+    "outline_color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+    "outline": {"type": "number", "minimum": 0},
+    "bold": {"type": "boolean"},
+    "margin_v": {"type": "integer", "minimum": 0},
+    "position": {"enum": ["bottom", "center", "top"]},
+    "box": {"type": "boolean"},
+    "box_color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+    "box_opacity": {"type": "number", "minimum": 0, "maximum": 1},
+    "box_padding": {"type": "integer", "minimum": 0, "maximum": 200},
+    "appear": {"enum": ["none", "fade", "typing", "slide_up", "pop"]},
+    "appear_duration": {"type": "number", "minimum": 0, "maximum": 5},
+}
+
 JSON_SCHEMA: dict = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://github.com/knhanul/dubbing/schema/project.schema.json",
@@ -413,22 +447,7 @@ JSON_SCHEMA: dict = {
                 "burn_in": {"type": "boolean"},
                 "style": {
                     "type": "object",
-                    "properties": {
-                        "font": {"type": "string"},
-                        "size": {"type": "integer", "minimum": 8, "maximum": 300},
-                        "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                        "outline_color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                        "outline": {"type": "number", "minimum": 0},
-                        "bold": {"type": "boolean"},
-                        "margin_v": {"type": "integer", "minimum": 0},
-                        "position": {"enum": ["bottom", "center", "top"]},
-                        "box": {"type": "boolean"},
-                        "box_color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                        "box_opacity": {"type": "number", "minimum": 0, "maximum": 1},
-                        "box_padding": {"type": "integer", "minimum": 0, "maximum": 200},
-                        "appear": {"enum": ["none", "fade", "typing", "slide_up", "pop"]},
-                        "appear_duration": {"type": "number", "minimum": 0, "maximum": 5},
-                    },
+                    "properties": _STYLE_PROPS,
                     "additionalProperties": False,
                 },
                 "items": {
@@ -439,6 +458,13 @@ JSON_SCHEMA: dict = {
                         "properties": {
                             "index": {"type": "integer"},
                             "start": _num, "end": _num, "text": {"type": "string"},
+                            "style": {
+                                "type": ["object", "null"],
+                                "description": "이 자막만 다르게 할 모양 (subtitle.style 과 같은 칸 중 바꿀 것만). "
+                                               "생략하면 subtitle.style 을 따름",
+                                "properties": _STYLE_PROPS,
+                                "additionalProperties": False,
+                            },
                         },
                     },
                 },
@@ -474,6 +500,12 @@ JSON_SCHEMA: dict = {
                 "folder": {"type": "string"},
                 "volume": {"type": "number", "minimum": 0, "maximum": 4},
                 "latency_ms": _num,
+                "notes": {
+                    "type": "object",
+                    "description": "녹음본(파일)별 이름·★ (프로그램이 관리, AI 는 쓰지 않아도 됨)",
+                    "additionalProperties": {"type": "object", "properties": {
+                        "name": {"type": "string"}, "star": {"type": "boolean"}}},
+                },
                 "takes": {
                     "type": "array",
                     "items": {

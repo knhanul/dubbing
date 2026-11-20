@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDoubleSpinBo
                                QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 from ..schema import MOTION_LABELS, TRANSITION_LABELS, TRANSITIONS, Clip, Transition
+from ..subtitle_style import describe_override
 from ..subtitles import detach_takes, ensure_items, has_subtitles, to_srt
 from .model import ProjectModel
 from .size_presets import combo_size, fill_size_combo, sync_size_combo
@@ -327,7 +328,7 @@ class TransitionPage(_Page):
 
 
 class SubtitlePage(_Page):
-    style_requested = Signal()
+    style_requested = Signal(str)  # "selected" = 고른 자막만 꾸미기, "all" = 모든 자막 모양
 
     def __init__(self, model):
         super().__init__(model)
@@ -337,8 +338,22 @@ class SubtitlePage(_Page):
         self.text.setFixedHeight(64)
         self.text.setPlaceholderText("자막 글 (줄바꿈 가능)")
         s = self.section("내용")
-        self.btn_style = s.add_link("🅰 자막 모양 바꾸기 ›", self.style_requested.emit, "글꼴·크기·색·위치는 🅰 자막 탭에서")
+        self.btn_style = s.add_link("🅰 모든 자막 모양 ›", lambda: self.style_requested.emit("all"),
+                                    "모든 자막의 글꼴·크기·색·위치는 🅰 자막 탭에서")
         s.add(self.text)
+        # 이 자막만 다른 모양 (색·크기·위치·효과 …)
+        s = self.section("이 자막만 다른 모양")
+        self.look_info = QLabel()
+        self.look_info.setWordWrap(True)
+        self.look_info.setStyleSheet("font-size:11px;")
+        s.add(self.look_info)
+        self.btn_item_style = QPushButton("✨ 이 자막만 꾸미기…")
+        self.btn_item_style.setToolTip("🅰 자막 탭을 '고른 자막만'으로 엽니다 — 바꾼 칸만 이 자막에 적용되고, 나머지는 전체 모양을 따릅니다")
+        self.btn_item_style.clicked.connect(lambda: self.style_requested.emit("selected"))
+        self.btn_item_reset = QPushButton("전체 모양으로")
+        self.btn_item_reset.setToolTip("이 자막만 다르게 한 모양을 지우고 모든 자막과 같은 모양으로 (Ctrl+Z 로 되돌리기)")
+        self.btn_item_reset.clicked.connect(self._clear_style)
+        s.row(self.btn_item_style, self.btn_item_reset)
         self.start = NudgeSpin(0, 36000)
         self.end = NudgeSpin(0, 36000)
         self.after = NudgeSpin(-3600, 3600)
@@ -380,6 +395,15 @@ class SubtitlePage(_Page):
             self.text.setPlainText(it.text)
         self.start.setValue(it.start)
         self.end.setValue(it.end)
+        n = self.model.selection.count
+        idx = set(self.model.selection.indices)
+        custom = any(x.style for x in self.model.project.subtitle.items or [] if x.index in idx)
+        if it.style:
+            self.look_info.setText("✨ 전체와 다른 칸: " + describe_override(it.style))
+        else:
+            self.look_info.setText("모든 자막과 같은 모양입니다." + (" (같이 고른 자막 중에는 따로 꾸민 것이 있음)" if custom else ""))
+        self.btn_item_style.setText(f"✨ 고른 자막 {n}개만 꾸미기…" if n > 1 else "✨ 이 자막만 꾸미기…")
+        self.btn_item_reset.setEnabled(custom)
         self._after_prev = 0.0
         self.after.setValue(0.0)
         self._loading = False
@@ -406,6 +430,15 @@ class SubtitlePage(_Page):
                     dd = max(d, -x.start)
                     x.start, x.end = round(x.start + dd, 3), round(x.end + dd, 3)
         self._set("after", fn)
+
+    def _clear_style(self):
+        idx = set(self.model.selection.indices)
+
+        def fn(p):
+            for x in ensure_items(p):
+                if x.index in idx:
+                    x.style = None
+        self.model.edit(fn)  # 되돌리기 한 번
 
     def _delete(self):
         it = self.item()
@@ -1118,7 +1151,7 @@ EMPTY_TAB_NAME = "🛠 선택"
 class Inspector(QWidget):
     """'🛠 선택' 탭: 타임라인에서 고른 항목만 편집합니다. 탭 이름은 고른 것에 따라 (🛠 클립 / 🛠 자막 …)."""
 
-    style_requested = Signal()  # '🅰 자막' 탭 열기
+    style_requested = Signal(str)  # '🅰 자막' 탭 열기 ("selected" = 고른 자막만, "all" = 모든 자막)
     title_changed = Signal(str)  # 탭 이름
 
     def __init__(self, model: ProjectModel, parent=None):

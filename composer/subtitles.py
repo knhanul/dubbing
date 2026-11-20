@@ -21,6 +21,7 @@ class Cue:
     start: float
     end: float
     text: str
+    style: Optional[dict] = None  # 이 자막만 다른 모양(SubtitleItem.style). None = 전체 모양
 
     @property
     def duration(self) -> float:
@@ -98,7 +99,7 @@ def apply_offset(cues: Iterable[Cue], offset: float) -> list[Cue]:
         s, e = c.start + offset, c.end + offset
         if e <= 0:
             continue
-        res.append(Cue(c.index, round(max(0.0, s), 4), round(e, 4), c.text))
+        res.append(Cue(c.index, round(max(0.0, s), 4), round(e, 4), c.text, c.style))
     res.sort(key=lambda c: (c.start, c.end))
     return res
 
@@ -107,7 +108,7 @@ def project_cues(project: Project, apply_global_offset: bool = True) -> list[Cue
     """프로젝트의 최종 자막 목록(미세 조정 반영, 전역 오프셋 적용)."""
     st = project.subtitle
     if st.items is not None:
-        cues = [Cue(i.index, i.start, i.end, i.text) for i in st.items]
+        cues = [Cue(i.index, i.start, i.end, i.text, dict(i.style) if i.style else None) for i in st.items]
     elif st.file:
         path = project.resolve(st.file)
         cues = load_subtitles(path) if path and path.exists() else []

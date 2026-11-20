@@ -420,6 +420,81 @@
               },
               "text": {
                 "type": "string"
+              },
+              "style": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "이 자막만 다르게 할 모양 (subtitle.style 과 같은 칸 중 바꿀 것만). 생략하면 subtitle.style 을 따름",
+                "properties": {
+                  "font": {
+                    "type": "string"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "minimum": 8,
+                    "maximum": 300
+                  },
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#[0-9A-Fa-f]{6}$"
+                  },
+                  "outline_color": {
+                    "type": "string",
+                    "pattern": "^#[0-9A-Fa-f]{6}$"
+                  },
+                  "outline": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "bold": {
+                    "type": "boolean"
+                  },
+                  "margin_v": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "position": {
+                    "enum": [
+                      "bottom",
+                      "center",
+                      "top"
+                    ]
+                  },
+                  "box": {
+                    "type": "boolean"
+                  },
+                  "box_color": {
+                    "type": "string",
+                    "pattern": "^#[0-9A-Fa-f]{6}$"
+                  },
+                  "box_opacity": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "box_padding": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 200
+                  },
+                  "appear": {
+                    "enum": [
+                      "none",
+                      "fade",
+                      "typing",
+                      "slide_up",
+                      "pop"
+                    ]
+                  },
+                  "appear_duration": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 5
+                  }
+                },
+                "additionalProperties": false
               }
             }
           }
@@ -564,6 +639,21 @@
         "latency_ms": {
           "type": "number"
         },
+        "notes": {
+          "type": "object",
+          "description": "녹음본(파일)별 이름·★ (프로그램이 관리, AI 는 쓰지 않아도 됨)",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "star": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
         "takes": {
           "type": "array",
           "items": {
@@ -599,22 +689,6 @@
                   "null"
                 ],
                 "exclusiveMinimum": 0
-              }
-            },
-            "additionalProperties": false
-          }
-        },
-        "notes": {
-          "description": "녹음본(파일)별 이름·★ 표시. 키 = 프로젝트 기준 파일 경로 (takes/line_0001_v2.wav)",
-          "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "name": {
-                "type": "string"
-              },
-              "star": {
-                "type": "boolean"
               }
             },
             "additionalProperties": false
