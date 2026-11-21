@@ -107,28 +107,29 @@ def preview_size(out_w: int, out_h: int) -> tuple[int, int]:
 
 
 def effect_preview_path(source: Path, at: float, params: dict, size: tuple[int, int], fit: str, bg: str,
-                        cache: Optional[Path] = None) -> Optional[Path]:
+                        cache: Optional[Path] = None, anchor: str = "center") -> Optional[Path]:
     from ..thumbs import thumb_cache_dir
     sk = _source_key(Path(source), at)
     if sk is None:
         return None
-    key = _phash({"src": sk, "p": params, "size": list(size), "fit": fit, "bg": bg, "v": 1})
+    key = _phash({"src": sk, "p": params, "size": list(size), "fit": fit, "bg": bg, "anchor": anchor, "v": 1})
     return (cache or thumb_cache_dir()) / "fx" / f"{key}.png"
 
 
 def effect_preview(source: Path, at: float, is_video: bool, params: dict, size: tuple[int, int],
-                   fit: str = "cover", bg: str = "#000000", cache: Optional[Path] = None) -> Optional[Path]:
+                   fit: str = "cover", bg: str = "#000000", cache: Optional[Path] = None,
+                   anchor: str = "center") -> Optional[Path]:
     """한 장면에 효과를 모두 입힌 그림 한 장 (내보내기와 같은 화면 맞춤 + effect_filters). 같은 값이면 캐시."""
     from ..probe import ffmpeg_path
     from ..render.ffmpeg_builder import _fit_filters
-    out = effect_preview_path(source, at, params, size, fit, bg, cache)
+    out = effect_preview_path(source, at, params, size, fit, bg, cache, anchor)
     if out is None:
         return None
     if out.exists() and out.stat().st_size > 0:
         return out
     out.parent.mkdir(parents=True, exist_ok=True)
     w, h = size
-    vf = _fit_filters(fit, w, h, bg) + effect_filters(SimpleNamespace(**params), h) + ["format=rgb24"]
+    vf = _fit_filters(fit, w, h, bg, anchor=anchor) + effect_filters(SimpleNamespace(**params), h) + ["format=rgb24"]
     args = [ffmpeg_path(), "-v", "error", "-y"] + _input_args(Path(source), at, is_video, cache)
     tmp = out.with_suffix(".tmp.png")
     args += ["-frames:v", "1", "-vf", ",".join(vf), str(tmp)]

@@ -400,6 +400,7 @@ AI 없이도 탐색기에서 파일을 끌어다 놓아 프로젝트를 만들 �
 | width, height | 1920, 1080 | 출력 크기(짝수). 세로 쇼츠는 1080×1920 |
 | fps | 30 | 프레임 수 |
 | fit | `cover` | `cover` 꽉 채우고 넘치는 부분 잘라냄 / `contain` 전체를 보이고 남는 곳은 여백 |
+| crop_anchor | `center` | cover일 때 잘라 낼 기준: `center` / `top` / `bottom` / `left` / `right` |
 | background | `#000000` | contain 여백 색 |
 | original_volume | 1.0 | 모든 클립 원본 소리에 곱하는 전체 볼륨 |
 | file | `output.mp4` | 내보낼 때 기본 파일 이름 |

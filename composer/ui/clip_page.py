@@ -46,10 +46,17 @@ class ClipPage(_Page):
         self.fit = Segmented([(None, "기본값", "📤 내보내기 탭의 화면 맞춤을 따릅니다"),
                               ("cover", "꽉 채우기", "화면을 꽉 채우고 넘치는 부분은 잘라냅니다"),
                               ("contain", "전체 보이기", "그림 전체가 보이게, 남는 곳은 여백 색")])
+        self.crop_anchor = Segmented([
+            ("top", "위"), ("center", "가운데"), ("bottom", "아래"),
+            ("left", "왼쪽"), ("right", "오른쪽"),
+        ])
+        self.crop_anchor.setToolTip("꽉 채우기일 때 잘라 낼 기준 위치")
         self.ed_label = QLineEdit()
         self.ed_label.setPlaceholderText("타임라인에 보일 이름 (비우면 파일 이름)")
         s = self.section("화면")
         s.add(field("화면 맞춤", self.fit))
+        self.f_anchor = field("남길 위치", self.crop_anchor)
+        s.add(self.f_anchor)
         s.add(field("이름표", self.ed_label))
 
         # --- 효과 (지금 걸린 것 요약 + 효과 탭 바로가기) ---
@@ -87,6 +94,7 @@ class ClipPage(_Page):
         self.mute.toggled.connect(lambda v: self._set("mute", lambda p: setattr(c(), "mute", v)))
         self.vol_slider.valueChanged.connect(lambda v: self._set("vol", lambda p: setattr(c(), "volume", v)))
         self.fit.changed.connect(lambda v: self._set("fit", lambda p: setattr(c(), "fit", v)))
+        self.crop_anchor.changed.connect(lambda v: self._set("anchor", lambda p: setattr(c(), "crop_anchor", v)))
 
     @property
     def idx(self) -> int:
@@ -146,6 +154,10 @@ class ClipPage(_Page):
         self.lbl_fx.setStyleSheet("color:#f0d27a;" if parts else DIM)
         self.sec_fx.set_dirty(bool(parts))
         self.fit.set_value(c.fit)
+        self.crop_anchor.set_value(c.crop_anchor or "center")
+        # 꽉 채우기일 때만 남길 위치 표시
+        is_cover = (c.fit or "cover") == "cover"
+        self.f_anchor.setVisible(is_cover)
         self._loading = False
 
     def _speed_preset(self, i: int):

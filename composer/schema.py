@@ -94,6 +94,7 @@ class Clip:
     mute: bool = False
     volume: float = 1.0
     fit: Optional[str] = None  # None 이면 output.fit
+    crop_anchor: str = "center"  # cover일 때 잘라 낼 기준: center | top | bottom | left | right
     transition: Optional[Transition] = None  # 이전 클립 -> 이 클립 전환 (None 이면 전역 기본값)
     label: str = ""
     # ✨ 효과 (composer/effects.py) — 기본값이면 아무 필터도 안 붙음
@@ -426,6 +427,7 @@ JSON_SCHEMA: dict = {
                     "mute": {"type": "boolean"},
                     "volume": {"type": "number", "minimum": 0, "maximum": 4},
                     "fit": {"type": ["string", "null"], "enum": FITS + [None]},
+                    "crop_anchor": {"type": "string", "enum": ["center", "top", "bottom", "left", "right"]},
                     "transition": {"oneOf": [_transition, {"type": "null"}]},
                     "label": {"type": "string"},
                     "look": {"type": "string", "enum": LOOKS, "description": "색 필터"},

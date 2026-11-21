@@ -214,6 +214,16 @@
               null
             ]
           },
+          "crop_anchor": {
+            "type": "string",
+            "enum": [
+              "center",
+              "top",
+              "bottom",
+              "left",
+              "right"
+            ]
+          },
           "transition": {
             "oneOf": [
               {

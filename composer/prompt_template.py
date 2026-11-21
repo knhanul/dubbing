@@ -85,6 +85,7 @@ RULES = f"""규칙:
 4. clips 는 영상에 나올 순서대로 나열한다.
    - type: "image" 또는 "video"
    - label: 장면 이름(예: S04). 선택 사항이며 타임라인에 표시된다.
+   - crop_anchor: fit이 cover일 때 잘라 낼 기준(center/top/bottom/left/right, 기본 center).
    - 이미지: duration(표시 시간) 필수. motion 으로 움직임을 준다(영상 클립에도 쓸 수 있음).
      motion 값: {", ".join(MOTIONS)}
      motion_strength: 0~1 (0.1~0.25 권장, 클수록 많이 움직임)

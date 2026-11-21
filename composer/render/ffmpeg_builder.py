@@ -91,13 +91,24 @@ def video_encoder_args(settings: RenderSettings, stage: str, fps: float) -> list
     return ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-g", gop, "-pix_fmt", "yuv420p"]
 
 
-def _fit_filters(fit: str, w: int, h: int, bg: str, flags: str = "lanczos") -> list[str]:
+def _fit_filters(fit: str, w: int, h: int, bg: str, flags: str = "lanczos", anchor: str = "center") -> list[str]:
     color = bg.replace("#", "0x")
     if fit == "contain":
         return [f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags={flags}",
                 f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color={color}"]
+    # cover
+    x = "(iw-ow)/2"
+    y = "(ih-oh)/2"
+    if anchor == "top":
+        y = "0"
+    elif anchor == "bottom":
+        y = "ih-oh"
+    elif anchor == "left":
+        x = "0"
+    elif anchor == "right":
+        x = "iw-ow"
     return [f"scale={w}:{h}:force_original_aspect_ratio=increase:flags={flags}",
-            f"crop={w}:{h}"]
+            f"crop={w}:{h}:{x}:{y}"]
 
 
 def motion_quad(motion: str, strength: float, frames: int, easing: str = "ease",
@@ -188,12 +199,12 @@ def build_clip_job(project: Project, clip: Clip, timing: ClipTiming, settings: R
         motion = clip.motion or "none"
         if motion == "none" or clip.motion_strength <= 0:
             args += ["-loop", "1", "-framerate", fps_s, "-t", dur_s, "-i", str(source)]
-            vf = _fit_filters(fit, w, h, bg) + [f"fps={fps_s}"]
+            vf = _fit_filters(fit, w, h, bg, anchor=clip.crop_anchor) + [f"fps={fps_s}"]
         else:
             k = settings.motion_upscale()
             n = frame_count(dur, fps)
             args += ["-loop", "1", "-framerate", fps_s, "-t", dur_s, "-i", str(source)]
-            vf = _fit_filters(fit, w * k, h * k, bg) + [
+            vf = _fit_filters(fit, w * k, h * k, bg, anchor=clip.crop_anchor) + [
                 "format=yuv444p",
                 motion_filter(motion, clip.motion_strength, n, clip.motion_easing,
                               clip.motion_from, clip.motion_to),
@@ -212,7 +223,7 @@ def build_clip_job(project: Project, clip: Clip, timing: ClipTiming, settings: R
         moving = motion != "none" and clip.motion_strength > 0
         k = settings.motion_upscale() if moving else 1
         vf = [f"setpts=(PTS-STARTPTS)/{fmt(sp)}" if abs(sp - 1) > 1e-6 else "setpts=PTS-STARTPTS",
-              f"fps={fps_s}"] + _fit_filters(fit, w * k, h * k, bg)
+              f"fps={fps_s}"] + _fit_filters(fit, w * k, h * k, bg, anchor=clip.crop_anchor)
         if freeze_pre > 1e-3:  # 앞 여분이 모자라면 첫 프레임을 멈춰서 채움
             vf.append(f"tpad=start_mode=clone:start_duration={fmt(freeze_pre)}")
         if moving:

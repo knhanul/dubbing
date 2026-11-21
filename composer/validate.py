@@ -289,6 +289,7 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
         v.boolean(c, "mute", p)
         v.num(c, "volume", p, 0, 4)
         v.enum(c, "fit", p, FITS, nullable=True)
+        v.enum(c, "crop_anchor", p, ["center", "top", "bottom", "left", "right"])
         _transition(v, c.get("transition"), f"{p}.transition")
         tr = c.get("transition") if isinstance(c.get("transition"), dict) else None
         dur = c.get("fit_duration") or c.get("duration")
