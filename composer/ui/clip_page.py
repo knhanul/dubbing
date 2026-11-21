@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QLabel, QLineEdit
 
 from ..schema import MOTION_LABELS, Clip
 from .inspector_base import _Page, SPEEDS, _rel
-from .widgets import DIM, NudgeSpin, Segmented, ValueSlider, field, link_button, shrink
+from .widgets import DIM, NudgeSpin, Segmented, ValueSlider, field, hrow, link_button, shrink
 
 class ClipPage(_Page):
     effects_requested = Signal()  # '✨ 효과 탭에서 바꾸기'
