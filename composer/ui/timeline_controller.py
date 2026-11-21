@@ -112,6 +112,8 @@ class TimelineController:
         t = round(self.win.player.position() if t is None else t, 3)
         c.set_marks(t, c.mark_out if c.mark_out is not None and c.mark_out > t else None)
         self.update_cut_buttons()
+        if hasattr(self.win, "_ensure_range_tools_visible"):
+            self.win._ensure_range_tools_visible()
         self.win.statusBar().showMessage(f"In {fmt_time(t)} — 이제 Out(O)을 표시하세요", 4000)
 
     def set_mark_out(self, t: Optional[float] = None):
@@ -119,6 +121,8 @@ class TimelineController:
         t = round(self.win.player.position() if t is None else t, 3)
         c.set_marks(c.mark_in if c.mark_in is not None and c.mark_in < t else None, t)
         self.update_cut_buttons()
+        if hasattr(self.win, "_ensure_range_tools_visible"):
+            self.win._ensure_range_tools_visible()
         self.win.statusBar().showMessage(f"Out {fmt_time(t)}", 4000)
 
     def clear_marks(self):

@@ -512,6 +512,19 @@ class MainWindow(QMainWindow):
         self.btn_delete = b("🗑 삭제", "고른 조각을 지웁니다 (Delete). 클립은 뒤 클립이 당겨져 붙습니다(리플 삭제).",
                             self.delete_selected)
         sep()
+        # 구간 도구 (기본 숨김, I/O 누르면 펼침)
+        self.btn_range_toggle = QToolButton()
+        self.btn_range_toggle.setText("구간 ▾")
+        self.btn_range_toggle.setCheckable(True)
+        self.btn_range_toggle.setToolTip("In/Out 구간 도구 보이기/숨기기")
+        open_range = str(self.settings.value("timeline/range_open", False)).lower() in ("true", "1")
+        self.btn_range_toggle.setChecked(open_range)
+        self.btn_range_toggle.toggled.connect(self._set_range_tools_open)
+        bar.addWidget(self.btn_range_toggle)
+        self.range_tools = QWidget()
+        rl = QHBoxLayout(self.range_tools)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(3)
         self.btn_in = b("[ In", "구간 시작 표시 — 빨간 재생 위치 (I)", lambda: self.set_mark_in())
         self.btn_out = b("Out ]", "구간 끝 표시 — 빨간 재생 위치 (O)", lambda: self.set_mark_out())
         self.btn_cut_range = b("✂ 구간 잘라내기", "In~Out 구간을 빼고 뒤를 당겨 붙입니다 (Esc = In/Out 지우기)",
@@ -519,7 +532,12 @@ class MainWindow(QMainWindow):
         self.chk_all_tracks = QCheckBox("모든 트랙")
         self.chk_all_tracks.setChecked(True)
         self.chk_all_tracks.setToolTip("켜면 자막·더빙도 같은 구간을 빼고 함께 당깁니다(잠긴 트랙은 그대로)")
-        bar.addWidget(self.chk_all_tracks)
+        # 버튼을 bar 대신 range_tools 로 옮김
+        for w in (self.btn_in, self.btn_out, self.btn_cut_range, self.chk_all_tracks):
+            bar.removeWidget(w)
+            rl.addWidget(w)
+        bar.addWidget(self.range_tools)
+        self.range_tools.setVisible(open_range)
         sep()
         self.btn_magnet = tool(self.act_magnet)
         sep()
@@ -575,7 +593,14 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"＋ {i}번 ↔ {i + 1}번 클립 사이에 전환 {tr.duration:.2f}초 (Ctrl+Z 로 되돌리기)", 5000)
         return True
 
-    def _on_track_add(self, kind: str):
+    def _set_range_tools_open(self, on: bool):
+        self.range_tools.setVisible(on)
+        self.btn_range_toggle.setChecked(on)
+        self.settings.setValue("timeline/range_open", bool(on))
+
+    def _ensure_range_tools_visible(self):
+        if not self.range_tools.isVisible():
+            self._set_range_tools_open(True)
         if kind == "bgm":
             self.add_bgm()
         elif kind == "subtitle":
