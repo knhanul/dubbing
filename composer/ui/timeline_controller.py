@@ -70,7 +70,8 @@ class TimelineController:
         c = self.win.timeline.canvas
         has = c.mark_in is not None and c.mark_out is not None
         self.win.btn_cut_range.setEnabled(has)
-        self.win.btn_clear_marks.setEnabled(has or c.mark_in is not None or c.mark_out is not None)
+        if hasattr(self.win, "act_clear_marks"):
+            self.win.act_clear_marks.setEnabled(has or c.mark_in is not None or c.mark_out is not None)
 
     def cut_at(self, t: Optional[float] = None) -> bool:
         """✂ 자르기: 고른 클립/자막/더빙을 t 초에서 둘로."""
