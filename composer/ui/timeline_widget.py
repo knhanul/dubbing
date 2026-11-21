@@ -28,7 +28,7 @@ RULER_H = 22
 TRACKS = [("clip", "클립", 54), ("subtitle", "자막", 38), ("take", "더빙", 32), ("bgm", "배경음악", 30)]
 LABEL_W = 8  # 캔버스 왼쪽 여백 (트랙 이름·단추는 TrackHeader 에)
 HEADER_W = 152
-EDGE = 6
+EDGE = 9
 
 
 KIND_NAMES = {"clip": "클립", "subtitle": "자막", "take": "더빙", "transition": "전환", "bgm": "배경음악"}
@@ -57,7 +57,7 @@ class TimelineCanvas(QWidget):
     files_dropped = Signal(list, int)  # 탐색기에서 끌어온 경로들, 클립 삽입 위치
     zoom_changed = Signal(float)  # 초당 픽셀 (툴바 확대 슬라이더와 맞춤)
     razor_requested = Signal(str, int, float)  # ✂ 자르기 도구로 누른 (종류, 번호, 타임라인 초)
-    add_requested = Signal(str)  # 빈 트랙의 '＋ 음악 넣기'(bgm) / '＋ 자막 파일'(subtitle)
+    add_requested = Signal(str)  # 빈 트랙의 '＋ 음악 넣기'(bgm) / '＋ 자막 파일'(subtitle) / '＋ 사진·영상'(clip) / 녹음 탭(take)
     status_requested = Signal(str)  # 상태 표시줄 안내 (더빙 조각을 옆 끝에 붙였을 때 등)
 
     def __init__(self, model: ProjectModel, parent=None):
@@ -164,12 +164,19 @@ class TimelineCanvas(QWidget):
     def add_buttons(self) -> list[tuple[str, QRectF, str]]:
         out = []
         pr = self.model.project
+        if not pr.clips:
+            r = self.track_rect("clip")
+            out.append(("clip", QRectF(self.x_of(0) + 4, r.top() + 4, 160, r.height() - 8), "＋ 사진·영상 넣기"))
         if not pr.bgm.file:
             r = self.track_rect("bgm")
             out.append(("bgm", QRectF(self.x_of(0) + 4, r.top() + 4, 150, r.height() - 8), "＋ 음악 넣기"))
         if not self.model.cues:
             r = self.track_rect("subtitle")
             out.append(("subtitle", QRectF(self.x_of(0) + 4, r.top() + 5, 170, r.height() - 10), "＋ 자막 파일 불러오기"))
+        if not pr.dubbing.takes:
+            r = self.track_rect("take")
+            out.append(("take", QRectF(self.x_of(0) + 4, r.top() + 4, 240, r.height() - 8),
+                        "🎤 녹음 탭에서 녹음하면 여기에 생겨요"))
         return out
 
     def set_playhead(self, t: float):

@@ -228,8 +228,7 @@ class MainWindow(QMainWindow):
         self.timeline.canvas.razor_requested.connect(self.timeline_ctrl.razor)
         # ... existing connections ...
         self.timeline.canvas.status_requested.connect(lambda t: self.statusBar().showMessage(t, 6000))
-        self.timeline.canvas.add_requested.connect(
-            lambda k: self.add_bgm() if k == "bgm" else self.add_subtitle_file())
+        self.timeline.canvas.add_requested.connect(self._on_track_add)
         self.dub.status.connect(lambda m: self.statusBar().showMessage(m, 6000))
         self.model.changed.connect(self._on_changed)
         self.model.selection_changed.connect(self._on_selection)
@@ -575,6 +574,16 @@ class MainWindow(QMainWindow):
         tr = self.model.timeline.clips[i].transition_in
         self.statusBar().showMessage(f"＋ {i}번 ↔ {i + 1}번 클립 사이에 전환 {tr.duration:.2f}초 (Ctrl+Z 로 되돌리기)", 5000)
         return True
+
+    def _on_track_add(self, kind: str):
+        if kind == "bgm":
+            self.add_bgm()
+        elif kind == "subtitle":
+            self.add_subtitle_file()
+        elif kind == "clip":
+            self.add_clips()
+        elif kind == "take":
+            self.right.setCurrentWidget(self.dub_scroll)
 
     def _on_right_tab(self, i: int):
         """✨ 효과 탭에 있는 동안은 미리보기 영상 다시 만들기를 미룸 (값을 바꿀 때마다 영상 전체를 만들면 느린 PC 가 버벅임)."""
