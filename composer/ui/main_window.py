@@ -118,51 +118,6 @@ class MainWindow(QMainWindow):
         top.setSizes([900, 560])
         main = QSplitter(Qt.Vertical)
         main.addWidget(top)
-        self._make_actions()
-        main.addWidget(self._build_timeline_box())
-        main.setSizes([700, 260])
-        self.setCentralWidget(main)
-
-        self.player.position_changed.connect(self.timeline.set_playhead)
-        self.timeline.canvas.seek_requested.connect(self.player.seek)
-        self.timeline.canvas.context_requested.connect(self._timeline_menu)
-        # 드롭 이벤트가 끝난 뒤 처리(드롭 중에 창을 띄우면 Windows 탐색기 끌기가 멈춤)
-        self.timeline.canvas.files_dropped.connect(lambda paths, idx: self._drop_later(paths, idx))
-        # 탐색기에서 창 어디에 놓아도 받기 (미리보기 화면은 부모 창으로 넘김)
-        self.setAcceptDrops(True)
-        self.player.view.setAcceptDrops(False)
-        self.player.view.viewport().setAcceptDrops(False)
-        self.last_drop_report = ""
-        ins = self.inspector
-        ins.take_page.play_requested.connect(self.dub.play_take)
-        ins.take_page.rerecord_requested.connect(self.rerecord_take)
-        ins.take_page.play_file_requested.connect(lambda rel: self.dub.play_version(self.model.selection.index, rel))
-        ins.take_page.delete_file_requested.connect(self.delete_take_file)
-        ins.sub_file_panel.remove_subtitles_requested.connect(self.remove_all_subtitles)
-        ins.bgm_page.remove_requested.connect(self.remove_bgm)
-        ins.bgm_page.pick_requested.connect(lambda: self.add_bgm())
-        ins.output_page.export_requested.connect(self.render_final)
-        ins.output_page.voice_requested.connect(self.export_voice)
-        ins.empty.ai_requested.connect(lambda: self.open_prompt_dialog())
-        ins.empty.add_requested.connect(self.add_clips)
-        ins.empty.bgm_requested.connect(lambda: self.add_bgm())
-        ins.empty.sub_requested.connect(lambda: self.add_subtitle_file())
-        ins.empty.record_requested.connect(self.start_next_recording)
-        ins.empty.export_requested.connect(lambda: self.right.setCurrentWidget(self.output_scroll))
-        self.dub.script_requested.connect(self.open_script_dialog)
-        self.timeline.canvas.razor_requested.connect(self.timeline_ctrl.razor)
-        # ... existing connections ...
-        self.timeline.canvas.status_requested.connect(lambda t: self.statusBar().showMessage(t, 6000))
-        self.timeline.canvas.add_requested.connect(
-            lambda k: self.add_bgm() if k == "bgm" else self.add_subtitle_file())
-        self.dub.status.connect(lambda m: self.statusBar().showMessage(m, 6000))
-        self.model.changed.connect(self._on_changed)
-        self.model.selection_changed.connect(self._on_selection)
-        self.model.dirty_changed.connect(lambda _: self._title())
-        self.model.path_changed.connect(self._title)
-        self.player.playing_changed.connect(lambda p: None if p else self.dub.stop_live())
-
-        self.settings = QSettings("knhanul", "VideoComposer")
         # 미리보기 조율은 PreviewController 로 분리
         self.preview = PreviewController(self)
         self.auto = self.preview.auto  # 기존 코드 호환용
@@ -234,6 +189,51 @@ class MainWindow(QMainWindow):
         self._set_magnet = self.timeline_ctrl.set_magnet
         self._update_cut_buttons = self.timeline_ctrl.update_cut_buttons
         self.nudge_selected = self.timeline_ctrl.nudge_selected
+        self._make_actions()
+        main.addWidget(self._build_timeline_box())
+        main.setSizes([700, 260])
+        self.setCentralWidget(main)
+
+        self.player.position_changed.connect(self.timeline.set_playhead)
+        self.timeline.canvas.seek_requested.connect(self.player.seek)
+        self.timeline.canvas.context_requested.connect(self._timeline_menu)
+        # 드롭 이벤트가 끝난 뒤 처리(드롭 중에 창을 띄우면 Windows 탐색기 끌기가 멈춤)
+        self.timeline.canvas.files_dropped.connect(lambda paths, idx: self._drop_later(paths, idx))
+        # 탐색기에서 창 어디에 놓아도 받기 (미리보기 화면은 부모 창으로 넘김)
+        self.setAcceptDrops(True)
+        self.player.view.setAcceptDrops(False)
+        self.player.view.viewport().setAcceptDrops(False)
+        self.last_drop_report = ""
+        ins = self.inspector
+        ins.take_page.play_requested.connect(self.dub.play_take)
+        ins.take_page.rerecord_requested.connect(self.rerecord_take)
+        ins.take_page.play_file_requested.connect(lambda rel: self.dub.play_version(self.model.selection.index, rel))
+        ins.take_page.delete_file_requested.connect(self.delete_take_file)
+        ins.sub_file_panel.remove_subtitles_requested.connect(self.remove_all_subtitles)
+        ins.bgm_page.remove_requested.connect(self.remove_bgm)
+        ins.bgm_page.pick_requested.connect(lambda: self.add_bgm())
+        ins.output_page.export_requested.connect(self.render_final)
+        ins.output_page.voice_requested.connect(self.export_voice)
+        ins.empty.ai_requested.connect(lambda: self.open_prompt_dialog())
+        ins.empty.add_requested.connect(self.add_clips)
+        ins.empty.bgm_requested.connect(lambda: self.add_bgm())
+        ins.empty.sub_requested.connect(lambda: self.add_subtitle_file())
+        ins.empty.record_requested.connect(self.start_next_recording)
+        ins.empty.export_requested.connect(lambda: self.right.setCurrentWidget(self.output_scroll))
+        self.dub.script_requested.connect(self.open_script_dialog)
+        self.timeline.canvas.razor_requested.connect(self.timeline_ctrl.razor)
+        # ... existing connections ...
+        self.timeline.canvas.status_requested.connect(lambda t: self.statusBar().showMessage(t, 6000))
+        self.timeline.canvas.add_requested.connect(
+            lambda k: self.add_bgm() if k == "bgm" else self.add_subtitle_file())
+        self.dub.status.connect(lambda m: self.statusBar().showMessage(m, 6000))
+        self.model.changed.connect(self._on_changed)
+        self.model.selection_changed.connect(self._on_selection)
+        self.model.dirty_changed.connect(lambda _: self._title())
+        self.model.path_changed.connect(self._title)
+        self.player.playing_changed.connect(lambda p: None if p else self.dub.stop_live())
+
+        self.settings = QSettings("knhanul", "VideoComposer")
         self.preview_revision = self.preview.preview_revision
         self.preview_is_direct = self.preview.preview_is_direct
         # 배경음악은 미리보기에서 따로 재생 (🔇/S 를 바꿔도 영상은 다시 만들지 않음)
