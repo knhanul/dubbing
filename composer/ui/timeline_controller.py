@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QMessageBox
 
-from ..edit_ops import cut_at as op_cut_at, cut_range
+from ..edit_ops import clip_index_at, cut_range, split_clip, split_cue, split_take
 from ..schema import Transition
 from ..subtitles import detach_takes, ensure_items
 from ..timeline import build_timeline
@@ -73,15 +73,37 @@ class TimelineController:
         self.win.btn_clear_marks.setEnabled(has or c.mark_in is not None or c.mark_out is not None)
 
     def cut_at(self, t: Optional[float] = None) -> bool:
-        if self.win._locked_msg("clip"):
-            return False
+        """✂ 자르기: 고른 클립/자막/더빙을 t 초에서 둘로."""
         t = self.win.player.position() if t is None else t
-        box = {}
-        self.win.model.edit(lambda p: box.setdefault("ok", op_cut_at(p, t)))
-        if not box.get("ok"):
-            self.win.statusBar().showMessage("자를 수 있는 클립이 없습니다", 4000)
+        s = self.win.model.selection
+        kind, idx = s.kind, s.index
+        if kind == "clip":
+            tm = self.win.model.timeline.clips[idx] if 0 <= idx < len(self.win.model.timeline.clips) else None
+            if tm is None or not (tm.start < t < tm.end):
+                kind = ""
+        if kind not in ("clip", "subtitle", "take"):
+            kind, idx = "clip", clip_index_at(self.win.model.timeline, t)
+            if idx is None:
+                self.win.statusBar().showMessage("재생 위치 아래에 자를 클립이 없습니다", 5000)
+                return False
+        if self.win._locked_msg(kind):
             return False
-        self.win.statusBar().showMessage(f"✂ {fmt_time(t)} 에서 잘랐습니다 (Ctrl+Z 로 되돌리기)", 5000)
+        box = {}
+        tl = self.win.model.timeline
+        if kind == "clip":
+            self.win.model.edit(lambda p: box.setdefault("ok", split_clip(p, tl, idx, t)))
+        elif kind == "subtitle":
+            self.win.model.edit(lambda p: box.setdefault("ok", split_cue(p, idx, t)))
+        else:
+            tt = t + self.win.model.project.dubbing.latency_ms / 1000.0
+            self.win.model.edit(lambda p: box.setdefault("ok", split_take(p, idx, tt, self.win._file_len)))
+        if not box.get("ok"):
+            where = "자를 위치(재생 헤드)를 고른 더빙 조각 안쪽에" if kind == "take" else "재생 위치를 그 항목 안쪽에"
+            self.win.statusBar().showMessage(f"자를 수 없습니다 — {where} 두세요 (끝에서 0.1초 이상 안쪽)", 6000)
+            return False
+        name = {"clip": "클립", "subtitle": "자막", "take": "더빙"}[kind]
+        self.win.model.select(kind, idx + 1)
+        self.win.statusBar().showMessage(f"✂ {name}을(를) {fmt_time(t)}에서 둘로 나눴습니다 (Ctrl+Z 로 되돌리기)", 5000)
         return True
 
     def set_mark_in(self, t: Optional[float] = None):
@@ -103,22 +125,32 @@ class TimelineController:
         self.update_cut_buttons()
 
     def cut_marked_range(self) -> bool:
-        from ..edit_ops import cut_range
+        """✂ 구간 잘라내기: In~Out 을 클립에서 빼고 당김."""
+        from ..tracks import locked
         c = self.win.timeline.canvas
         if c.mark_in is None or c.mark_out is None:
+            self.win.statusBar().showMessage("먼저 In(I)과 Out(O)을 표시하세요", 5000)
             return False
         if self.win._locked_msg("clip"):
             return False
-        a, b = sorted((c.mark_in, c.mark_out))
-        all_tracks = self.win.chk_cut_all.isChecked()
+        a, b = c.mark_in, c.mark_out
+        allt = self.win.chk_all_tracks.isChecked()
+        skip = {k for k in ("subtitle", "dubbing") if locked(self.win.model.project, k)}
         box = {}
-        self.win.model.edit(lambda p: box.setdefault("n", cut_range(p, a, b, all_tracks)))
-        n = box.get("n", 0)
-        if not n:
-            self.win.statusBar().showMessage("자를 구간이 없습니다", 4000)
+
+        def fn(p):
+            box["r"] = cut_range(p, lambda: build_timeline(p, self.win.model.duration_of), a, b, allt,
+                                 self.win._file_len, skip)
+        self.win.model.edit(fn)
+        removed, note = box.get("r", (0.0, ""))
+        if removed <= 0:
+            self.win.statusBar().showMessage("잘라낼 클립이 없습니다", 5000)
             return False
         self.clear_marks()
-        self.win.statusBar().showMessage(f"✂ {fmt_time(a)}~{fmt_time(b)} 구간을 잘랐습니다 (Ctrl+Z 로 되돌리기)", 6000)
+        self.win.model.select("")
+        self.win.player.seek(min(a, b))
+        extra = " (잠긴 트랙은 그대로)" if allt and skip else ""
+        self.win.statusBar().showMessage(f"✂ {removed:.2f}초를 잘라내고 당겼습니다: {note}{extra} — Ctrl+Z 로 되돌리기", 8000)
         return True
 
     # ------------------------------------------------------------------ 선택 / 삭제
