@@ -118,6 +118,8 @@ class MainWindow(QMainWindow):
         top.setSizes([900, 560])
         main = QSplitter(Qt.Vertical)
         main.addWidget(top)
+        # 설정은 컨트롤러들이 사용하므로 먼저 만듦
+        self.settings = QSettings("knhanul", "VideoComposer")
         # 미리보기 조율은 PreviewController 로 분리
         self.preview = PreviewController(self)
         self.auto = self.preview.auto  # 기존 코드 호환용
@@ -233,7 +235,6 @@ class MainWindow(QMainWindow):
         self.model.path_changed.connect(self._title)
         self.player.playing_changed.connect(lambda p: None if p else self.dub.stop_live())
 
-        self.settings = QSettings("knhanul", "VideoComposer")
         self.preview_revision = self.preview.preview_revision
         self.preview_is_direct = self.preview.preview_is_direct
         # 배경음악은 미리보기에서 따로 재생 (🔇/S 를 바꿔도 영상은 다시 만들지 않음)
