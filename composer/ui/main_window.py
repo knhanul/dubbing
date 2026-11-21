@@ -36,7 +36,7 @@ from .prompt_dialog import PromptDialog
 from .render_dialog import FinalRenderOptions, ProgressDialog, RenderWorker
 from .timeline_widget import TimelineView
 
-EMPTY_HINT = "이미지·동영상을 끌어다 놓거나 'AI 로 구성하기'로 시작하세요"
+EMPTY_HINT = "① 사진·영상을 끌어다 놓거나\n② 'AI로 구성하기'로 시작하세요\n\n처음이라면 오른쪽 '시작하기'를 따라 하세요"
 MEDIA_FILTER = "미디어 (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.mp4 *.mov *.mkv *.webm *.avi *.m4v)"
 
 
@@ -315,7 +315,8 @@ class MainWindow(QMainWindow):
         self._act(f, "📄 대본 출력…", self.open_script_dialog, "Ctrl+P")
         f.addSeparator()
         self._act(f, "🤖 AI 로 구성하기…", self.open_prompt_dialog, "Ctrl+Shift+A")
-        self._act(f, "🔁 녹음에 맞춰 다시 구성 (AI)…", self.ai_ctrl.open_realign_dialog)
+        self._act(f, "🔁 녹음에 맞춰 다시 구성 (AI)…", self.ai_ctrl.open_realign_dialog,
+                  tip="녹음이 길면 장면과 목소리가 어긋날 수 있습니다. AI가 클립 길이를 다시 맞춰 줍니다.")
         self._act(f, "동영상 + 자막으로 더빙 시작…", self.open_video_for_dubbing, "Ctrl+Shift+O")
         f.addSeparator()
         self._act(f, "캐시 비우기 (미리보기·내보내기 중간 파일)", self.clear_cache)

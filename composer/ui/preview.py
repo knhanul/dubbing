@@ -70,11 +70,11 @@ class _View(QGraphicsView):
             paint_subtitle(painter, frame, self.text, look, self.out_h, st)
         if self.empty_hint:
             f = QFont(self.font())
-            f.setPixelSize(max(14, int(vh * 0.04)))
+            f.setPixelSize(max(16, int(vh * 0.045)))
             f.setBold(True)
             painter.setFont(f)
-            painter.setPen(QColor("#c8ccd4"))
-            painter.drawText(QRectF(20, 0, vw - 40, vh), Qt.AlignCenter | Qt.TextWordWrap, "⬇\n" + self.empty_hint)
+            painter.setPen(QColor("#e6e6e6"))
+            painter.drawText(QRectF(30, 0, vw - 60, vh), Qt.AlignCenter | Qt.TextWordWrap, "⬇\n" + self.empty_hint)
         if self.progress_text:
             f = QFont(self.font())
             f.setPixelSize(15)

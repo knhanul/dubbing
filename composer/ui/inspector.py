@@ -536,15 +536,24 @@ class EmptyPage(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(6)
-        self.title = QLabel("더빙 영상 만들기")
-        self.title.setStyleSheet("font-size:13px;font-weight:bold;")
-        self.summary = QLabel()
+        self.title = QLabel("처음 사용하시나요?")
+        self.title.setStyleSheet("font-size:15px;font-weight:bold;")
+        self.summary = QLabel("세 단계만 따라 하면 됩니다.")
         self.summary.setWordWrap(True)
-        self.summary.setStyleSheet(DIM + "font-size:11px;")
+        self.summary.setStyleSheet(DIM + "font-size:12px;")
         lay.addWidget(self.title)
         lay.addWidget(self.summary)
+        # 핵심 3단계 강조
+        guide = QLabel(
+            "<b>1.</b> 사진·영상 폴더를 준비하거나 끌어다 놓기<br>"
+            "<b>2.</b> <b>AI로 구성하기</b>로 클립과 자막 만들기<br>"
+            "<b>3.</b> 자막을 보며 목소리 녹음 → 내보내기"
+        )
+        guide.setWordWrap(True)
+        guide.setStyleSheet("font-size:12px;padding:6px 0;")
+        lay.addWidget(guide)
         self.steps = {k: _Step(i + 1, t) for i, (k, t) in enumerate(
-            [("media", "사진·영상 넣기"), ("sub", "자막 불러오기"), ("rec", "목소리 녹음하기"),
+            [("media", "사진·영상 넣기"), ("sub", "자막 준비하기"), ("rec", "목소리 녹음하기"),
              ("bgm", "배경음악 넣기 (선택)"), ("export", "영상으로 내보내기")])}
         for s in self.steps.values():
             lay.addWidget(s)
@@ -553,9 +562,10 @@ class EmptyPage(QWidget):
         self.btn_bgm = self.steps["bgm"].btn
         self.btn_rec = self.steps["rec"].btn
         self.btn_export = self.steps["export"].btn
-        self.btn_ai = QPushButton("🤖 AI 로 구성하기")
-        self.btn_ai.setToolTip("대본이나 주제를 주면 클립·자막 구성을 만들어 줍니다")
-        lay.addWidget(hrow(self.btn_ai, None, stretches=[0, 1]))
+        self.btn_ai = QPushButton("🤖 AI로 구성하기 (추천)")
+        self.btn_ai.setToolTip("폴더의 파일로 프롬프트를 만들어 줍니다.\nAI에 붙여넣고 답변을 받으면 클립과 자막이 만들어집니다.")
+        self.btn_ai.setStyleSheet("font-weight:bold;padding:6px;")
+        lay.addWidget(self.btn_ai)
         for b, sig in ((self.btn_ai, self.ai_requested), (self.btn_add, self.add_requested),
                        (self.btn_bgm, self.bgm_requested), (self.btn_sub, self.sub_requested),
                        (self.btn_rec, self.record_requested), (self.btn_export, self.export_requested)):

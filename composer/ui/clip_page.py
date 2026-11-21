@@ -43,19 +43,19 @@ class ClipPage(_Page):
         s.row(self.chk_fit, self.fit_duration, stretches=[3, 2])
 
         # --- 화면 ---
-        self.fit = Segmented([(None, "기본값", "📤 내보내기 탭의 화면 맞춤을 따릅니다"),
-                              ("cover", "꽉 채우기", "화면을 꽉 채우고 넘치는 부분은 잘라냅니다"),
-                              ("contain", "전체 보이기", "그림 전체가 보이게, 남는 곳은 여백 색")])
+        self.fit = Segmented([(None, "기본값", "내보내기 설정을 따릅니다"),
+                              ("cover", "꽉 채우기", "화면을 가득 채우고 남는 부분은 자릅니다"),
+                              ("contain", "전체 보이기", "그림 전체가 보이게 하고 빈 곳은 여백으로 둡니다")])
         self.crop_anchor = Segmented([
-            ("top", "위"), ("center", "가운데"), ("bottom", "아래"),
+            ("top", "위쪽"), ("center", "가운데"), ("bottom", "아래쪽"),
             ("left", "왼쪽"), ("right", "오른쪽"),
         ])
-        self.crop_anchor.setToolTip("꽉 채우기일 때 잘라 낼 기준 위치")
+        self.crop_anchor.setToolTip("꽉 채우기일 때 어느 부분을 남길지 고릅니다")
         self.ed_label = QLineEdit()
         self.ed_label.setPlaceholderText("타임라인에 보일 이름 (비우면 파일 이름)")
         s = self.section("화면")
         s.add(field("화면 맞춤", self.fit))
-        self.f_anchor = field("남길 위치", self.crop_anchor)
+        self.f_anchor = field("남길 부분", self.crop_anchor)
         s.add(self.f_anchor)
         s.add(field("이름표", self.ed_label))
 

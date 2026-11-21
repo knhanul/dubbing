@@ -69,12 +69,21 @@ class PromptDialog(QDialog):
         self.rad_realign.setChecked(self.mode == "realign")
         can_realign = bool(self.project and self.project.clips and self.project.dubbing.takes)
         self.rad_realign.setEnabled(can_realign)
-        if not can_realign:
-            self.rad_realign.setToolTip("클립과 녹음이 하나 이상 있어야 사용할 수 있습니다")
+        tip = "녹음이 길면 장면과 목소리가 어긋날 수 있습니다.\nAI가 클립 길이만 다시 맞춰 줍니다."
+        self.rad_realign.setToolTip(tip if can_realign else "클립과 녹음이 하나 이상 있어야 사용할 수 있습니다")
         mode_box.addWidget(self.rad_initial)
         mode_box.addWidget(self.rad_realign)
         mode_box.addStretch(1)
         form.addRow("모드", mode_box)
+        # 단계 안내
+        steps = QLabel(
+            "<b>①</b> 프롬프트 만들기 → 복사<br>"
+            "<b>②</b> ChatGPT / Claude 에 붙여넣기<br>"
+            "<b>③</b> 답변을 아래 탭에 붙여넣기 → 적용"
+        )
+        steps.setWordWrap(True)
+        steps.setStyleSheet("color:#9aa0aa;font-size:11px;padding:4px 0;")
+        form.addRow("순서", steps)
         l1.addLayout(form)
         b_gen = QPushButton("프롬프트 만들기")
         self.prompt = QPlainTextEdit(); self.prompt.setReadOnly(False)

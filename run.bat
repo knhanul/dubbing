@@ -19,4 +19,4 @@ if not exist ".venv\Scripts\python.exe" (
         exit /b 1
     )
 )
-start "" ".venv\Scripts\pythonw.exe" -m composer %*
+start "" ".venv\Scripts\python.exe" -m composer %*
