@@ -545,29 +545,31 @@ class EmptyPage(QWidget):
         lay.addWidget(self.summary)
         # 핵심 3단계 강조
         guide = QLabel(
-            "<b>1.</b> 사진·영상 폴더를 준비하거나 끌어다 놓기<br>"
-            "<b>2.</b> <b>AI로 구성하기</b>로 클립과 자막 만들기<br>"
+            "<b>1.</b> 사진·영상·배경음악을 끌어다 놓거나 넣기<br>"
+            "<b>2.</b> <b>AI로 구성하기</b>로 클립과 자막을 한 번에 만들기<br>"
             "<b>3.</b> 자막을 보며 목소리 녹음 → 내보내기"
         )
         guide.setWordWrap(True)
         guide.setStyleSheet("font-size:12px;padding:6px 0;")
         lay.addWidget(guide)
         self.steps = {k: _Step(i + 1, t) for i, (k, t) in enumerate(
-            [("media", "사진·영상 넣기"), ("sub", "자막 준비하기"), ("rec", "목소리 녹음하기"),
-             ("bgm", "배경음악 넣기 (선택)"), ("export", "영상으로 내보내기")])}
+            [("media", "사진·영상·음악 넣기"), ("ai", "AI로 구성하기 (클립+자막)"),
+             ("rec", "목소리 녹음하기"), ("export", "영상으로 내보내기")])}
         for s in self.steps.values():
             lay.addWidget(s)
         self.btn_add = self.steps["media"].btn
-        self.btn_sub = self.steps["sub"].btn
-        self.btn_bgm = self.steps["bgm"].btn
+        self.btn_ai_step = self.steps["ai"].btn
         self.btn_rec = self.steps["rec"].btn
         self.btn_export = self.steps["export"].btn
+        # 호환: 기존 연결이 btn_sub / btn_bgm 을 참조할 수 있음
+        self.btn_sub = self.btn_ai_step
+        self.btn_bgm = self.btn_add
         self.btn_ai = QPushButton("🤖 AI로 구성하기 (추천)")
-        self.btn_ai.setToolTip("폴더의 파일로 프롬프트를 만들어 줍니다.\nAI에 붙여넣고 답변을 받으면 클립과 자막이 만들어집니다.")
+        self.btn_ai.setToolTip("폴더의 파일로 프롬프트를 만들어 줍니다.\nAI에 붙여넣고 답변을 받으면 클립과 자막이 한 번에 만들어집니다.")
         self.btn_ai.setStyleSheet("font-weight:bold;padding:6px;")
         lay.addWidget(self.btn_ai)
-        for b, sig in ((self.btn_ai, self.ai_requested), (self.btn_add, self.add_requested),
-                       (self.btn_bgm, self.bgm_requested), (self.btn_sub, self.sub_requested),
+        for b, sig in ((self.btn_ai, self.ai_requested), (self.btn_ai_step, self.ai_requested),
+                       (self.btn_add, self.add_requested),
                        (self.btn_rec, self.record_requested), (self.btn_export, self.export_requested)):
             b.clicked.connect(sig.emit)
         msg = QLabel("타임라인에서 <b>클립 · 전환 · 자막 · 더빙 · 배경음악</b>을 누르면 그 설정이 여기에 나옵니다.<br>"
@@ -588,19 +590,19 @@ class EmptyPage(QWidget):
         n_rec = sum(1 for c in cues if find_take(p, c.index) is not None)
         self.summary.setText(f"{self.model.path.stem if self.model.path else '이 프로젝트'} · 길이 {fmt_time(self.model.timeline.total)} · "
                              f"클립 {len(p.clips)}개 · 자막 {n_sub}줄 · 더빙 {len(p.dubbing.takes)}개")
-        done = {"media": bool(p.clips), "sub": n_sub > 0, "rec": n_sub > 0 and n_rec >= n_sub,
-                "bgm": bool(p.bgm.file), "export": False}
-        order = ["media", "sub", "rec", "export"]  # 배경음악은 선택이라 '지금 할 일'로 고르지 않음
+        done = {"media": bool(p.clips or p.bgm.file), "ai": n_sub > 0 or bool(p.clips),
+                "rec": n_sub > 0 and n_rec >= n_sub, "export": False}
+        order = ["media", "ai", "rec", "export"]
         cur = next((k for k in order if not done[k]), "export")
         o = p.output
         info = {
-            "media": (f"클립 {len(p.clips)}개" if p.clips else "이미지·영상 파일을 끌어 놓거나 눌러서 고르기",
+            "media": (f"클립 {len(p.clips)}개" + (f" · 음악 {p.bgm.file}" if p.bgm.file else "") if p.clips or p.bgm.file
+                      else "이미지·영상·음악을 끌어 놓거나 눌러서 고르기",
                       "+ 더 넣기" if p.clips else "➕ 미디어 추가"),
-            "sub": (((p.subtitle.file or "고친 자막") + f" · {n_sub}줄") if n_sub else "SRT 자막 파일 불러오기 (대본만 있으면 녹음 탭의 자유 녹음)",
-                    "바꾸기" if n_sub else "📝 자막 파일 불러오기"),
+            "ai": (f"클립 {len(p.clips)}개 · 자막 {n_sub}줄" if (p.clips or n_sub) else "AI가 클립과 자막을 함께 구성합니다",
+                   "다시 구성" if (p.clips or n_sub) else "🤖 AI로 구성하기"),
             "rec": (f"{n_sub}줄 중 {n_rec}줄 녹음함" if n_sub else "자막이 있으면 한 줄씩 녹음할 수 있어요",
                     "● 이어서 녹음" if n_rec else "● 녹음 시작"),
-            "bgm": (p.bgm.file or "없어도 돼요", "♪ 배경음악 바꾸기" if p.bgm.file else "♪ 배경음악 넣기"),
             "export": (f"{o.width}×{o.height}", "📤 내보내기 ›"),
         }
         for k, step in self.steps.items():

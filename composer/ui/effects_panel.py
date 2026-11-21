@@ -423,6 +423,7 @@ class EffectsPanel(QWidget):
         lay.addWidget(self.body)
 
         # --- 합쳐 보기 (지금 효과를 모두 입힌 그림, 높이 최대 150px) ---
+        self._pending_look: Optional[str] = None  # 클릭했지만 아직 적용 안 한 색 필터
         self.preview = PreviewLabel()
         self.preview.setStyleSheet("background:#111318;border:1px solid #474b55;border-radius:4px;color:#9aa0a6;")
         self.preview.setToolTip("고른 클립의 한 장면에 지금 효과(색 필터 · 밝기·색 · 분위기)를 모두 입힌 모습 — "
@@ -484,8 +485,13 @@ class EffectsPanel(QWidget):
             self.look_group.addButton(b)
             self.look_cards[lk] = b
             grid.addWidget(b, i // 4, i % 4)
-            b.clicked.connect(lambda _=False, v=lk: self._edit("look", lambda c, v=v: setattr(c, "look", v), None))
+            b.clicked.connect(lambda _=False, v=lk: self._preview_look(v))
         self.sec_look.add_widget_row(cards)
+        self.btn_apply_look = QPushButton("이 색 필터 적용")
+        self.btn_apply_look.setEnabled(False)
+        self.btn_apply_look.setToolTip("위 미리보기로 확인한 뒤 이 버튼을 누르면 클립에 적용됩니다")
+        self.btn_apply_look.clicked.connect(self._apply_pending_look)
+        self.sec_look.add_widget_row(self.btn_apply_look)
 
         self.sliders: dict[str, ValueSlider] = {}
         self.resets: dict[str, QToolButton] = {}
@@ -569,6 +575,29 @@ class EffectsPanel(QWidget):
         self.model.edit(lambda p: fn(p.clips[i]), merge_key=merge_key)
         return True
 
+    def _preview_look(self, look: str):
+        """색 필터를 클릭하면 위 미리보기에만 먼저 보여 줍니다 (아직 적용 안 함)."""
+        if self._loading or self.locked():
+            return
+        self._pending_look = look
+        self.btn_apply_look.setEnabled(True)
+        self.btn_apply_look.setText(f"'{LOOK_LABELS.get(look, look)}' 적용")
+        for name, card in self.look_cards.items():
+            card.setChecked(name == look)
+        c = self.clip
+        if c is not None:
+            self._request_images(c, override_look=look)
+
+    def _apply_pending_look(self):
+        if not self._pending_look or self.locked():
+            return
+        look = self._pending_look
+        self._pending_look = None
+        self.btn_apply_look.setEnabled(False)
+        self.btn_apply_look.setText("이 색 필터 적용")
+        self._edit("look", lambda c, v=look: setattr(c, "look", v), None)
+        return True
+
     def apply_to_all(self) -> bool:
         src = self.clip
         if src is None or self.locked() or len(self.model.project.clips) < 2:
@@ -624,6 +653,9 @@ class EffectsPanel(QWidget):
         self.btn_all.setEnabled(len(self.model.project.clips) > 1)
         self._update_summaries(c)
         self._loading = False
+        self._pending_look = None
+        self.btn_apply_look.setEnabled(False)
+        self.btn_apply_look.setText("이 색 필터 적용")
         self._request_images(c)
 
     def _update_summaries(self, c):
@@ -649,25 +681,28 @@ class EffectsPanel(QWidget):
         at = (tm.source_in + min(1.0, (tm.source_out - tm.source_in) / 2)) if tm else 0.0
         return path, max(0.0, at)
 
-    def preview_spec(self, c):
-        """합쳐 보기 그림을 만들 값 (원본, 시각, 영상?, 효과 값, 크기, 화면 맞춤, 여백 색)."""
+    def preview_spec(self, c, override_look: Optional[str] = None):
+        """합쳐 보기 그림을 만들 값. override_look 이 있으면 아직 적용 안 한 색 필터로 미리봅니다."""
         path, at = self._thumb_source(c)
         if path is None:
             return None
         out = self.model.project.output
-        return (path, at, c.type == "video", effect_params(c), preview_size(out.width, out.height),
-                c.fit or out.fit, out.background)
+        params = effect_params(c)
+        if override_look is not None:
+            params = {**params, "look": override_look}
+        return (path, at, c.type == "video", params, preview_size(out.width, out.height),
+                c.fit or out.fit, out.background, c.crop_anchor or "center")
 
-    def _request_images(self, c):
-        spec = self.preview_spec(c)
+    def _request_images(self, c, override_look: Optional[str] = None):
+        spec = self.preview_spec(c, override_look)
         if spec is None:
             self._set_preview(None)
             self._set_icons({})
             self._want = {"preview": None, "thumbs": None}
             return
-        path, at, is_video, params, size, fit, bg = spec
+        path, at, is_video, params, size, fit, bg, anchor = spec
         pparams = params if self.compare == "fx" else {k: DEFAULTS[k] for k in EFFECT_FIELDS}
-        pkey = str(effect_preview_path(path, at, pparams, size, fit, bg))
+        pkey = str(effect_preview_path(path, at, pparams, size, fit, bg, anchor=anchor))
         tfolder, _ = _looks_folder(path, at, params, None)
         tkey = str(tfolder)
         need_p = need_t = False
