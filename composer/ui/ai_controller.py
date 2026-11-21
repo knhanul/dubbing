@@ -16,14 +16,17 @@ class AiController:
     def __init__(self, window):
         self.win = window
 
-    def open_prompt_dialog(self, tab: int = 0):
+    def open_prompt_dialog(self, tab: int = 0, mode: str = "initial"):
         if not isinstance(tab, int):
             tab = 0
         folder = self.win.model.project.base_dir if self.win.model.path or self.win.model.project.clips else None
-        dlg = PromptDialog(folder, self.win)
+        dlg = PromptDialog(folder, self.win, project=self.win.model.project, mode=mode)
         dlg.tabs.setCurrentIndex(tab)
         dlg.apply_requested.connect(self.apply_ai_result)
         dlg.exec()
+
+    def open_realign_dialog(self):
+        self.open_prompt_dialog(mode="realign")
 
     def apply_ai_result(self, data: dict, folder: Path):
         """검사를 통과한 AI 결과를 현재 타임라인에 반영합니다."""

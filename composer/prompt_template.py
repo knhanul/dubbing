@@ -149,3 +149,131 @@ def build_prompt(entries: list[FileEntry], request: str = "", width: int = 1920,
         lines += ["", "정확한 JSON Schema:", "```json", schema_text.strip(), "```"]
     lines += ["", "이제 위 규칙대로 JSON 만 출력해."]
     return "\n".join(lines) + "\n"
+
+
+def build_realign_prompt(project, entries: list[FileEntry], request: str = "",
+                         width: int = 1920, height: int = 1080, fps: float = 30) -> str:
+    """녹음 완료 후 클립 길이를 낭독 시간에 맞게 다시 구성하도록 요청하는 프롬프트.
+
+    clips와 transition(필요시 output.fade)만 출력하도록 안내한다.
+    """
+    from .subtitles import project_cues
+    from .timeline import build_timeline, take_position
+    from .probe import probe
+    from .autosub import detect_speech
+
+    lines = [
+        "너는 영상 편집 도우미야. 이미 구성된 프로젝트의 클립 길이를 실제 낭독 시간에 맞게 다시 조정해 줘.",
+        "자막과 더빙 녹음은 이미 되어 있으니, **클립 길이·전환만** 조정한 JSON을 출력해.",
+        "",
+        "## 내가 원하는 조정",
+        request.strip() or "(낭독이 쉬는 구간의 가운데에 장면이 바뀌고, 말소리와 전환이 겹치지 않게 해 줘)",
+        "",
+        f"출력 해상도: {width}x{height}, {fps:g}fps",
+        "",
+        "## 현재 클립 목록",
+    ]
+
+    # 클립 타이밍
+    def _dur(clip):
+        if clip.type != "video":
+            return None
+        p = project.resolve(clip.file)
+        return probe(p).duration if p and p.exists() else None
+
+    tl = build_timeline(project, _dur)
+    for i, ct in enumerate(tl.clips):
+        c = project.clips[i]
+        src = _dur(c)
+        parts = [f"{i+1}. file={c.file!r} type={c.type}"]
+        if c.label:
+            parts.append(f"label={c.label!r}")
+        parts.append(f"timeline={ct.start:.2f}~{ct.end:.2f}s")
+        if c.type == "image":
+            parts.append(f"duration={c.duration or 4.0:.2f}")
+            if c.motion and c.motion != "none":
+                parts.append(f"motion={c.motion} strength={c.motion_strength:.2f}")
+        else:
+            parts.append(f"src_duration={src or 0:.2f}s")
+            if c.trim_start:
+                parts.append(f"trim_start={c.trim_start:.2f}")
+            if c.trim_end:
+                parts.append(f"trim_end={c.trim_end:.2f}")
+            if abs(c.speed - 1) > 1e-6:
+                parts.append(f"speed={c.speed:.2f}")
+            if c.fit_duration:
+                parts.append(f"fit_duration={c.fit_duration:.2f}")
+            if c.mute:
+                parts.append("mute=true")
+        if ct.transition_in and ct.transition_in.duration > 0:
+            parts.append(f"transition_in={ct.transition_in.type}/{ct.transition_in.duration:.2f}s")
+        lines.append("- " + " | ".join(parts))
+
+    # 자막
+    lines += ["", "## 현재 자막 목록 (offset 적용된 최종 시간)"]
+    cues = project_cues(project, apply_global_offset=True)
+    cues_by_idx = {c.index: c for c in cues}
+    for c in cues:
+        text_preview = (c.text or "").replace("\n", " / ")[:60]
+        lines.append(f"- index={c.index} {c.start:.2f}~{c.end:.2f}s : {text_preview}")
+
+    # 더빙
+    lines += ["", "## 더빙 녹음 (자막 index별 실제 말소리 구간)"]
+    takes_by_sub = {}
+    for take in project.dubbing.takes:
+        if take.subtitle is not None:
+            takes_by_sub.setdefault(take.subtitle, []).append(take)
+
+    for c in cues:
+        takes = takes_by_sub.get(c.index, [])
+        if not takes:
+            lines.append(f"- index={c.index}: 녹음 없음")
+            continue
+        for take in takes:
+            pos = take_position(take, cues_by_idx, project.dubbing.latency_ms)
+            # 말소리 구간 추정
+            file_path = project.resolve(take.file) if take.file else None
+            speech = None
+            note = "무음 포함"
+            if file_path and file_path.exists():
+                try:
+                    regions = detect_speech(file_path)
+                    if regions:
+                        # 테이크 파일 기준 말소리 → 타임라인 절대 시간으로 변환
+                        trim_s = take.trim_start or 0.0
+                        speech_start = pos + (regions[0][0] - trim_s)
+                        speech_end = pos + (regions[-1][1] - trim_s)
+                        speech = (max(0, speech_start), speech_end)
+                        note = "무음 제거"
+                except Exception:
+                    pass
+            if speech:
+                lines.append(f"- index={c.index}: 말소리 {speech[0]:.2f}~{speech[1]:.2f}s ({note})")
+            else:
+                # 테이크 구간 그대로
+                end = pos + (take.trim_end or 0) - (take.trim_start or 0) if take.trim_end else pos + 5.0
+                lines.append(f"- index={c.index}: 테이크 {pos:.2f}~{end:.2f}s ({note})")
+
+    # 파일 목록
+    lines += ["", "## 사용 가능한 파일"]
+    labels = {"image": "이미지", "video": "영상", "audio": "음악/소리", "subtitle": "자막"}
+    if not entries:
+        lines.append("(파일 없음)")
+    for e in entries:
+        extra = f" ({e.info})" if e.info else ""
+        lines.append(f"- {e.name} — {labels.get(e.kind, e.kind)}{extra}")
+
+    # 규칙
+    lines += [
+        "",
+        "## 규칙",
+        "a. clips와 transition(필요하면 output.fade_in/fade_out)만 출력한다. subtitle, bgm, dubbing은 출력하지 않는다.",
+        "b. 클립 순서와 file은 바꾸지 않는다. 길이(duration, trim, speed, fit_duration)와 전환만 조정한다.",
+        "c. 장면 경계는 낭독이 쉬는 구간의 가운데에 둔다. 전환이 말소리와 겹치지 않게 한다.",
+        "d. 전체 길이(클립 길이의 합)는 마지막 말소리 끝 + 여운 이상이어야 한다.",
+        "e. 영상 클립은 실제 파일 길이 안에서만 trim한다. 늘려야 하면 fit_duration을 쓰고, 0.75배속보다 느려지면 앞 이미지 클립을 늘린다.",
+        "f. JSON 하나만 출력한다. 설명·주석 없이.",
+        "",
+        "이제 위 규칙대로 JSON만 출력해.",
+    ]
+    return "\n".join(lines) + "\n"

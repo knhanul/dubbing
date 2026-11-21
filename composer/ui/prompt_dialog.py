@@ -9,11 +9,11 @@ from PySide6.QtCore import QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
-                               QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget)
+                               QRadioButton, QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
-from ..prompt_template import build_prompt, media_info_text, scan_folder
+from ..prompt_template import build_prompt, build_realign_prompt, media_info_text, scan_folder
 from ..schema import JSON_SCHEMA
 from ..validate import JsonExtractError, correction_prompt, extract_json, validate_project
 
@@ -24,11 +24,13 @@ class PromptDialog(QDialog):
 
     apply_requested = Signal(object, object)  # 검사를 통과한 JSON(dict), 작업 폴더 Path
 
-    def __init__(self, folder: Optional[Path] = None, parent=None):
+    def __init__(self, folder: Optional[Path] = None, parent=None, project=None, mode: str = "initial"):
         super().__init__(parent)
         self.setWindowTitle("AI 로 구성하기 — 프롬프트 복사 → AI 답변 붙여넣기 → 적용")
         self.resize(980, 720)
         self.folder: Optional[Path] = Path(folder) if folder else None
+        self.project = project
+        self.mode = mode  # "initial" or "realign"
         self.entries = []
         self.parsed: Optional[dict] = None
 
@@ -59,6 +61,20 @@ class PromptDialog(QDialog):
         form.addRow("목표 길이", self.target)
         form.addRow("", self.chk_info)
         form.addRow("", self.chk_schema)
+        # 모드 선택
+        mode_box = QHBoxLayout()
+        self.rad_initial = QRadioButton("처음 구성")
+        self.rad_realign = QRadioButton("녹음에 맞춰 다시 구성")
+        self.rad_initial.setChecked(self.mode != "realign")
+        self.rad_realign.setChecked(self.mode == "realign")
+        can_realign = bool(self.project and self.project.clips and self.project.dubbing.takes)
+        self.rad_realign.setEnabled(can_realign)
+        if not can_realign:
+            self.rad_realign.setToolTip("클립과 녹음이 하나 이상 있어야 사용할 수 있습니다")
+        mode_box.addWidget(self.rad_initial)
+        mode_box.addWidget(self.rad_realign)
+        mode_box.addStretch(1)
+        form.addRow("모드", mode_box)
         l1.addLayout(form)
         b_gen = QPushButton("프롬프트 만들기")
         self.prompt = QPlainTextEdit(); self.prompt.setReadOnly(False)
@@ -143,8 +159,13 @@ class PromptDialog(QDialog):
         info = media_info_text if self.chk_info.isChecked() else None
         self.entries = scan_folder(folder, info)
         schema = json.dumps(JSON_SCHEMA, ensure_ascii=False, indent=1) if self.chk_schema.isChecked() else None
-        self.prompt.setPlainText(build_prompt(self.entries, self.request.toPlainText(), self.w.value(), self.h.value(),
-                                              self.fps.value(), self.target.value() or None, schema))
+        if self.rad_realign.isChecked() and self.project:
+            text = build_realign_prompt(self.project, self.entries, self.request.toPlainText(),
+                                        self.w.value(), self.h.value(), self.fps.value())
+        else:
+            text = build_prompt(self.entries, self.request.toPlainText(), self.w.value(), self.h.value(),
+                                self.fps.value(), self.target.value() or None, schema)
+        self.prompt.setPlainText(text)
 
     def _text_changed(self):
         # 내용이 바뀌면 이전 검사 결과로 적용하지 못하게 막고 잠시 뒤 다시 검사
@@ -186,6 +207,23 @@ class PromptDialog(QDialog):
             self.b_fix.setEnabled(True)
             self._set_status("✖ JSON 을 읽을 수 없습니다 — '수정 요청 프롬프트 복사'로 AI 에게 다시 요청하세요.", "#ff6b6b")
             return
+        # 다시 구성 모드 안전장치
+        if self.rad_realign.isChecked() and self.project:
+            from ..subtitles import project_cues
+            cur_indices = sorted(c.index for c in project_cues(self.project))
+            items = (data.get("subtitle") or {}).get("items")
+            if isinstance(items, list) and items:
+                new_indices = sorted(it.get("index") for it in items if isinstance(it, dict) and "index" in it)
+                if new_indices != cur_indices:
+                    self._add("[오류] 자막 번호가 바뀌면 녹음이 다른 줄에 붙습니다. 자막은 빼고 다시 받아 주세요.", "#ff6b6b")
+                    self._set_status("✖ 자막 번호가 바뀌었습니다 — 자막은 빼고 다시 받아 주세요.", "#ff6b6b")
+                    return
+            # 클립 개수/순서 경고
+            if "clips" in data:
+                cur_files = [c.file for c in self.project.clips]
+                new_files = [c.get("file") for c in data["clips"] if isinstance(c, dict)]
+                if len(new_files) != len(cur_files) or new_files != cur_files:
+                    self._add("[경고] 클립 개수나 파일 순서가 바뀌었습니다. 의도한 것인지 확인하세요.", "#ffd166")
         issues = validate_project(data, folder)
         for i in issues:
             self._add(str(i), "#ff6b6b" if i.severity == "error" else "#ffd166")
