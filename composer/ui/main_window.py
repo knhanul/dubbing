@@ -17,7 +17,15 @@ from ..render.ffmpeg_builder import RenderSettings
 from ..render.runner import cache_dir, clear_cache
 from ..schema import Clip, Project, SubtitleSettings, Transition
 from ..validate import has_errors, validate_project
-from .auto_preview import AutoPreview
+from .preview_controller import PreviewController
+from .timeline_controller import TimelineController
+from .media_drop_controller import MediaDropController
+from .project_controller import ProjectController
+from .render_controller import RenderController
+from .ai_controller import AiController
+from .bgm_controller import BgmController
+from .recording_controller import RecordingController
+from .preview_helpers import PreviewHelpers
 from .subtitle_style_panel import SubtitleStylePanel
 from .dnd import ImageDefaultsDialog, paths_from_mime
 from .dubbing_panel import DubbingPanel
@@ -57,10 +65,7 @@ class MainWindow(QMainWindow):
         self.preview_is_direct = False
 
         self.player = PreviewPlayer()
-        self.player.subtitle_fn = self._subtitle_at
-        self.player.cue_fn = self._cue_at
-        self.player.placeholder_fn = self._placeholder_at
-        self.player.before_play = self._before_play
+        # callbacks will be set after helpers are created
         self._thumbs: dict = {}
         self._play_without_preview_ok = False
         self.dub = DubbingPanel(self.model, self.player)
@@ -145,7 +150,8 @@ class MainWindow(QMainWindow):
         ins.empty.record_requested.connect(self.start_next_recording)
         ins.empty.export_requested.connect(lambda: self.right.setCurrentWidget(self.output_scroll))
         self.dub.script_requested.connect(self.open_script_dialog)
-        self.timeline.canvas.razor_requested.connect(self._razor)
+        self.timeline.canvas.razor_requested.connect(self.timeline_ctrl.razor)
+        # ... existing connections ...
         self.timeline.canvas.status_requested.connect(lambda t: self.statusBar().showMessage(t, 6000))
         self.timeline.canvas.add_requested.connect(
             lambda k: self.add_bgm() if k == "bgm" else self.add_subtitle_file())
@@ -157,13 +163,79 @@ class MainWindow(QMainWindow):
         self.player.playing_changed.connect(lambda p: None if p else self.dub.stop_live())
 
         self.settings = QSettings("knhanul", "VideoComposer")
-        self._preview_seq = 0
-        self._preview_worker = None
-        self.auto = AutoPreview(self._render_revision_key, self._start_preview_worker, self._cancel_preview_worker,
-                                delay_ms=1500, parent=self)
-        self.auto.enabled = str(self.settings.value("view/auto_preview", True)).lower() not in ("false", "0")
-        self.auto.state_changed.connect(lambda _: self._update_notice())
-        self.model.changed.connect(self.auto.notify_changed)
+        # 미리보기 조율은 PreviewController 로 분리
+        self.preview = PreviewController(self)
+        self.auto = self.preview.auto  # 기존 코드 호환용
+        self.timeline_ctrl = TimelineController(self)
+        self.media_ctrl = MediaDropController(self)
+        self.project_ctrl = ProjectController(self)
+        self.render_ctrl = RenderController(self)
+        self.ai_ctrl = AiController(self)
+        self.bgm_ctrl = BgmController(self)
+        self.rec_ctrl = RecordingController(self)
+        self.preview_helpers = PreviewHelpers(self)
+        self.player.subtitle_fn = self.preview_helpers.subtitle_at
+        self.player.cue_fn = self.preview_helpers.cue_at
+        self.player.placeholder_fn = self.preview_helpers.placeholder_at
+        self.player.before_play = self.preview_helpers.before_play
+        self.ask_play_without_preview = self.preview_helpers.ask_play_without_preview
+        self.add_subtitle_here = self.rec_ctrl.add_subtitle_here
+        self.record_from_timeline = self.rec_ctrl.record_from_timeline
+        self.start_next_recording = self.rec_ctrl.start_next_recording
+        self.rerecord_take = self.rec_ctrl.rerecord_take
+        self.add_subtitle_file = self.rec_ctrl.add_subtitle_file
+        self.delete_take_file = self.rec_ctrl.delete_take_file
+        self.remove_all_subtitles = self.rec_ctrl.remove_all_subtitles
+        self.add_bgm = self.bgm_ctrl.add_bgm
+        self.remove_bgm = self.bgm_ctrl.remove_bgm
+        self._apply_bgm_volume = self.bgm_ctrl.apply_volume
+        self._bgm_building = self.bgm_ctrl.on_building
+        self._bgm_failed = self.bgm_ctrl.on_failed
+        self._bgm_on_play = self.bgm_ctrl.on_play
+        self._sync_bgm = self.bgm_ctrl.sync
+        self._apply_track_audio = self.bgm_ctrl.apply_track_audio
+        self.open_prompt_dialog = self.ai_ctrl.open_prompt_dialog
+        self.apply_ai_result = self.ai_ctrl.apply_ai_result
+        # 렌더/내보내기 위임
+        self.render_final = self.render_ctrl.render_final
+        self.export_voice = self.render_ctrl.export_voice
+        self.clear_cache = self.render_ctrl.clear_cache
+        self.open_script_dialog = self.render_ctrl.open_script_dialog
+        self._check_renderable = self.render_ctrl.check_renderable
+        self._overlap_ok = self.render_ctrl.overlap_ok
+        # 프로젝트 파일 관리 위임
+        self.maybe_save = self.project_ctrl.maybe_save
+        self.new_project = self.project_ctrl.new_project
+        self.open_project = self.project_ctrl.open_project
+        self.save = self.project_ctrl.save
+        self.save_as = self.project_ctrl.save_as
+        self.load_path = self.project_ctrl.load_path
+        self.add_recent = self.project_ctrl.add_recent
+        self.recent_files = self.project_ctrl.recent_files
+        self.open_recent = self.project_ctrl.open_recent
+        # 미디어 드롭/추가 위임
+        self.add_clips = self.media_ctrl.add_clips
+        self.handle_drop = self.media_ctrl.handle_drop
+        self.ask_media_order = self.media_ctrl.ask_media_order
+        self.notify = self.media_ctrl.notify
+        self.confirm = self.media_ctrl.confirm
+        # 기존 메서드 일부를 컨트롤러로 위임 (점진적 마이그레이션)
+        self.zoom_in = self.timeline_ctrl.zoom_in
+        self.zoom_out = self.timeline_ctrl.zoom_out
+        self.zoom_fit = self.timeline_ctrl.zoom_fit
+        self.cut_at = self.timeline_ctrl.cut_at
+        self.delete_selected = self.timeline_ctrl.delete_selected
+        self.clear_marks = self.timeline_ctrl.clear_marks
+        self.set_tool = self.timeline_ctrl.set_tool
+        self.set_mark_in = self.timeline_ctrl.set_mark_in
+        self.set_mark_out = self.timeline_ctrl.set_mark_out
+        self.cut_marked_range = self.timeline_ctrl.cut_marked_range
+        self.select_track_all = self.timeline_ctrl.select_track_all
+        self._set_magnet = self.timeline_ctrl.set_magnet
+        self._update_cut_buttons = self.timeline_ctrl.update_cut_buttons
+        self.nudge_selected = self.timeline_ctrl.nudge_selected
+        self.preview_revision = self.preview.preview_revision
+        self.preview_is_direct = self.preview.preview_is_direct
         # 배경음악은 미리보기에서 따로 재생 (🔇/S 를 바꿔도 영상은 다시 만들지 않음)
         from .bgm_live import BgmLive
         self.bgm_live = BgmLive(self)
@@ -175,7 +247,7 @@ class MainWindow(QMainWindow):
         self.player.playing_changed.connect(self._bgm_on_play)
         self.model.changed.connect(self._apply_track_audio)
         self._apply_track_audio()
-        self.player.btn_refresh.clicked.connect(self.render_preview)
+        self.player.btn_refresh.clicked.connect(self.preview.render_now)
 
         self._build_menus()
         self.key_filter = KeyFilter(self)
@@ -276,9 +348,9 @@ class MainWindow(QMainWindow):
         self.act_auto = QAction("자동 미리보기 (편집하면 알아서 다시 만들기)", self)
         self.act_auto.setCheckable(True)
         self.act_auto.setChecked(self.auto.enabled)
-        self.act_auto.toggled.connect(self._on_auto_toggled)
+        self.act_auto.toggled.connect(self.preview.on_auto_toggled)
         v.addAction(self.act_auto)
-        self._act(v, "🔄 미리보기 새로 만들기 (360p)", self.render_preview, "F5")
+        self._act(v, "🔄 미리보기 새로 만들기 (360p)", self.preview.render_now, "F5")
 
         h = mb.addMenu("도움말(&H)")
         self._act(h, "단축키", self.show_shortcuts, "F1")
@@ -480,32 +552,6 @@ class MainWindow(QMainWindow):
         self.zoom_slider.setValue(int(round(100 * math.log(max(5.0, pps) / 5.0) / math.log(160.0))))
         self.zoom_slider.blockSignals(False)
 
-    def zoom_in(self):
-        self.timeline.canvas.set_zoom(self.timeline.canvas.pps * 1.3)
-
-    def zoom_out(self):
-        self.timeline.canvas.set_zoom(self.timeline.canvas.pps / 1.3)
-
-    def zoom_fit(self):
-        total = max(self.model.timeline.total, 1.0)
-        vw = max(200, self.timeline.viewport().width())
-        self.timeline.canvas.set_zoom((vw - 40) / total)
-        self.timeline.horizontalScrollBar().setValue(0)
-
-    def _set_magnet(self, on: bool):
-        self.timeline.canvas.magnet = bool(on)
-        QSettings("knhanul", "VideoComposer").setValue("timeline/magnet", bool(on))
-
-    def set_tool(self, t: str):
-        self.timeline.canvas.set_tool(t)
-        (self.act_razor if t == "razor" else self.act_select).setChecked(True)
-        if t == "razor":
-            self.statusBar().showMessage("✂ 자르기 도구 — 클립·자막·더빙에서 자를 곳을 누르세요 (V 또는 Esc = 선택 도구)", 6000)
-
-    def _razor(self, kind: str, idx: int, t: float):
-        self.model.select(kind, idx)
-        self.cut_at(t)
-
     # --- ＋ 전환 / ＋ 자막 / ● 녹음 ---
     def add_transition_here(self) -> bool:
         from ..edit_ops import add_transition
@@ -524,141 +570,16 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"＋ {i}번 ↔ {i + 1}번 클립 사이에 전환 {tr.duration:.2f}초 (Ctrl+Z 로 되돌리기)", 5000)
         return True
 
-    def add_subtitle_here(self) -> bool:
-        from ..edit_ops import insert_cue
-        if self._locked_msg("subtitle"):
-            return False
-        t = self.player.position()
-        box = {}
-        self.model.edit(lambda p: box.setdefault("i", insert_cue(p, t)))
-        idx = box.get("i")
-        if idx is None:
-            self.statusBar().showMessage("여기에는 자막을 넣을 자리가 없습니다 (다른 자막과 겹침)", 5000)
-            return False
-        self.model.select("subtitle", idx)
-        self.right.setCurrentWidget(self.inspector)
-        te = self.inspector.sub_page.text
-        te.setFocus()
-        te.selectAll()
-        self.statusBar().showMessage("＋ 자막을 넣었습니다 — 오른쪽 '내용'에 글을 쓰세요 (Ctrl+Z 로 되돌리기)", 6000)
-        return True
-
-    def record_from_timeline(self):
-        """● 녹음: 녹음 탭으로 가서 — 자막이 있으면 선택(또는 재생 위치의) 자막 녹음, 없으면 자유 녹음."""
-        if self.dub.mode:
-            self.dub.stop_recording()
-            return
-        self.right.setCurrentWidget(self.dub_scroll)
-        if self.model.cues:
-            self.dub.mode_tabs.setCurrentIndex(0)
-            if self.model.selection.kind != "subtitle":
-                c = self.model.cue_timeline.current(self.player.position())
-                if c is not None:
-                    self.model.select("subtitle", c.index)
-            self.dub.record_line()
-        else:
-            self.dub.mode_tabs.setCurrentIndex(1)
-            self.dub.free_page.toggle_record()
-
     def _on_right_tab(self, i: int):
         """✨ 효과 탭에 있는 동안은 미리보기 영상 다시 만들기를 미룸 (값을 바꿀 때마다 영상 전체를 만들면 느린 PC 가 버벅임)."""
         if hasattr(self, "auto"):
             self.auto.set_hold(self.right.widget(i) is self.effects_scroll)
             self._update_notice()
 
-    def start_next_recording(self) -> bool:
-        """시작하기 '● 이어서 녹음': 녹음 탭으로 가서 아직 녹음 안 한 첫 줄을 고름 (녹음은 사용자가 시작)."""
-        from ..dubbing.takes import find_take
-        self.right.setCurrentWidget(self.dub_scroll)
-        cues = self.model.cues
-        if not cues:
-            self.dub.mode_tabs.setCurrentIndex(1)
-            return False
-        self.dub.mode_tabs.setCurrentIndex(0)
-        c = next((c for c in cues if find_take(self.model.project, c.index) is None), cues[0])
-        self.model.select("subtitle", c.index)
-        self.player.seek(max(0.0, c.start - 0.05))
-        self.statusBar().showMessage(f"{c.index}번 줄을 골랐어요 — ● 이 줄 녹음 (R) 을 누르면 시작합니다", 6000)
-        return True
-
-    def rerecord_take(self, i: int):
-        """더빙 속성의 ● 다시 녹음: 자막 줄 녹음이면 그 줄을 다시(새 버전), 자유 녹음이면 그 자리에서 새로 녹음."""
-        takes = self.model.project.dubbing.takes
-        if not (0 <= i < len(takes)) or self._locked_msg("take"):
-            return
-        tk = takes[i]
-        self.right.setCurrentWidget(self.dub_scroll)
-        if tk.subtitle is not None and self.model.cue_by_index(tk.subtitle) is not None:
-            self.dub.mode_tabs.setCurrentIndex(0)
-            self.model.select("subtitle", tk.subtitle)
-            self.dub.record_line()
-        else:
-            self.dub.mode_tabs.setCurrentIndex(1)
-            self.player.seek(self.model.take_positions()[i] + (tk.trim_start or 0.0))
-            self.dub.free_page.toggle_record()
-            self.statusBar().showMessage("새 녹음이 더해집니다 — 예전 녹음은 타임라인에서 고르고 Delete 로 지울 수 있어요", 8000)
-
     # --- 넣기 (배경음악 · 자막 파일) ---
-    def ask_bgm_file(self) -> str:
-        f, _ = QFileDialog.getOpenFileName(self, "배경음악", str(self.model.project.base_dir),
-                                           "오디오 (*.mp3 *.wav *.m4a *.aac *.flac *.ogg *.opus)")
-        return f
-
-    def add_bgm(self, f: str = "") -> bool:
-        if self._locked_msg("bgm"):
-            return False
-        f = f or self.ask_bgm_file()
-        if not f:
-            return False
-        set_bgm_file(self.model, f)
-        self.model.select("bgm", 0)
-        self.statusBar().showMessage(f"♪ 배경음악: {Path(f).name} — 오른쪽 🛠 속성에서 볼륨·페이드 (Ctrl+Z 로 되돌리기)", 6000)
-        return True
-
-    def add_subtitle_file(self, f: str = "") -> bool:
-        if self._locked_msg("subtitle"):
-            return False
-        if not self.inspector.sub_file_panel.pick_sub(f):
-            return False
-        self.statusBar().showMessage(f"📝 자막 {len(self.model.cues)}줄을 불러왔습니다 (Ctrl+Z 로 되돌리기)", 6000)
-        return True
-
-    def delete_take_file(self, rel: str) -> bool:
-        """녹음 기록의 🗑: 지금 어느 조각도 쓰지 않는 녹음 파일만, 확인 후 지움(파일 삭제는 되돌릴 수 없음)."""
-        p = self.model.project
-        if self._locked_msg("take"):
-            return False
-        norm = rel.replace("\\", "/").lower()
-        if any(t.file.replace("\\", "/").lower() == norm for t in p.dubbing.takes):
-            self.statusBar().showMessage("지금 쓰는 녹음은 지울 수 없습니다 — 다른 녹음을 '이걸로 쓰기' 한 뒤 지우세요", 6000)
-            return False
-        path = p.resolve(rel)
-        if not path or not path.exists():
-            return False
-        if not self.confirm("녹음 파일 삭제", f"{Path(rel).name} 파일을 지울까요?\n지운 파일은 되돌릴 수 없습니다(Ctrl+Z 로도 안 됨)."):
-            return False
-        try:
-            path.unlink()
-        except OSError as e:
-            self.statusBar().showMessage(f"지울 수 없습니다: {e}", 6000)
-            return False
-        from ..dubbing.takes import drop_take_note, note_key
-        if note_key(rel) in p.dubbing.notes:
-            self.model.edit(lambda pp: drop_take_note(pp, rel))  # 지운 녹음본의 이름·★ 도 정리
-        else:
-            self.model.commit()  # 바뀐 내용은 없지만 녹음 기록·녹음 탭 목록을 새로
-        self.statusBar().showMessage(f"🗑 {Path(rel).name} 을(를) 지웠습니다", 5000)
-        return True
-
     def show_image_defaults(self):
         self.image_defaults.show()
         self.image_defaults.raise_()
-
-    def _update_cut_buttons(self):
-        c = self.timeline.canvas
-        ok = c.mark_in is not None and c.mark_out is not None and abs(c.mark_out - c.mark_in) >= 0.1
-        self.btn_cut_range.setEnabled(ok)
-        self.act_clear_marks.setEnabled(c.mark_in is not None or c.mark_out is not None)
 
     def _file_len(self, rel: str) -> float:
         from ..probe import probe
@@ -667,164 +588,6 @@ class MainWindow(QMainWindow):
             return float(probe(p).duration or 0.0) if p and p.exists() else 1.0
         except Exception:  # noqa: BLE001
             return 1.0
-
-    def cut_at(self, t: Optional[float] = None) -> bool:
-        """✂ 자르기: 고른 클립/자막/더빙을(없거나 위치가 밖이면 재생 위치 아래 클립을) t 초에서 둘로."""
-        from ..edit_ops import clip_index_at, split_clip, split_cue, split_take
-        t = self.player.position() if t is None else t
-        s = self.model.selection
-        kind, idx = s.kind, s.index
-        if kind == "clip":
-            tm = self.model.timeline.clips[idx] if 0 <= idx < len(self.model.timeline.clips) else None
-            if tm is None or not (tm.start < t < tm.end):
-                kind = ""
-        if kind not in ("clip", "subtitle", "take"):
-            kind, idx = "clip", clip_index_at(self.model.timeline, t)
-            if idx is None:
-                self.statusBar().showMessage("재생 위치 아래에 자를 클립이 없습니다", 5000)
-                return False
-        if self._locked_msg(kind):
-            return False
-        box = {}
-        tl = self.model.timeline
-        if kind == "clip":
-            self.model.edit(lambda p: box.setdefault("ok", split_clip(p, tl, idx, t)))
-        elif kind == "subtitle":
-            self.model.edit(lambda p: box.setdefault("ok", split_cue(p, idx, t)))
-        else:
-            # 타임라인에는 더빙이 녹음 지연 보정만큼 앞당겨 그려지므로, 보이는 위치 기준으로 자름
-            tt = t + self.model.project.dubbing.latency_ms / 1000.0
-            self.model.edit(lambda p: box.setdefault("ok", split_take(p, idx, tt, self._file_len)))
-        if not box.get("ok"):
-            where = "자를 위치(재생 헤드)를 고른 더빙 조각 안쪽에" if kind == "take" else "재생 위치를 그 항목 안쪽에"
-            self.statusBar().showMessage(f"자를 수 없습니다 — {where} 두세요 (끝에서 0.1초 이상 안쪽)", 6000)
-            return False
-        name = {"clip": "클립", "subtitle": "자막", "take": "더빙"}[kind]
-        self.model.select(kind, idx + 1)  # 뒤 조각을 고름
-        self.statusBar().showMessage(f"✂ {name}을(를) {fmt_time(t)}에서 둘로 나눴습니다 (Ctrl+Z 로 되돌리기)", 5000)
-        return True
-
-    def select_track_all(self, kind: str) -> int:
-        """한 트랙의 항목을 모두 고릅니다 (Ctrl+A · 오른쪽 클릭 메뉴)."""
-        from .timeline_widget import KIND_NAMES
-        if kind == "transition":
-            kind = "transition" if self.model.valid_indices("transition") else "clip"
-        n = self.model.select_all(kind)
-        name = KIND_NAMES.get(kind, "")
-        self.statusBar().showMessage(f"{name} {n}개를 모두 골랐습니다 — 끌기·[ ]·Delete 가 모두에 적용됩니다" if n
-                                     else f"{name} 트랙에 고를 항목이 없습니다", 5000)
-        return n
-
-    def delete_selected(self) -> bool:
-        """🗑 삭제 (Delete): 고른 조각 지우기. 클립은 리플 삭제(뒤가 당겨 붙음). 여러 개면 한꺼번에(되돌리기 한 번)."""
-        kind = self.model.selection.kind
-        if kind in ("clip", "subtitle", "take", "bgm", "transition") and self._locked_msg(kind):
-            return True
-        if self.model.selection.count > 1:
-            return self._delete_many()
-        if kind == "clip":
-            self.inspector.clip_page._delete()
-            self.statusBar().showMessage("클립을 지우고 뒤 클립을 당겨 붙였습니다 (Ctrl+Z 로 되돌리기)", 5000)
-            return True
-        if kind == "subtitle":
-            if self.model.cue_by_index(self.model.selection.index) is not None:
-                self.inspector.sub_page._delete()
-                self.statusBar().showMessage("자막 한 줄을 지웠습니다 (Ctrl+Z 로 되돌리기)", 5000)
-            return True
-        if kind == "take":
-            self.inspector.take_page._delete()
-            self.statusBar().showMessage("더빙 조각을 지웠습니다 (원본 파일은 그대로, Ctrl+Z 로 되돌리기)", 5000)
-            return True
-        if kind == "transition":
-            self.inspector.tr_page.remove()
-            self.statusBar().showMessage("전환을 없앴습니다 (Ctrl+Z 로 되돌리기)", 5000)
-            return True
-        if kind == "bgm":
-            self.remove_bgm()
-            return True
-        if kind == "":
-            self.statusBar().showMessage("지울 항목을 먼저 타임라인에서 고르세요", 4000)
-        return False
-
-    def _delete_many(self) -> bool:
-        from ..schema import Transition
-        from ..subtitles import detach_takes, ensure_items
-        s = self.model.selection
-        kind, idx = s.kind, s.indices
-
-        def fn(p):
-            if kind == "clip":
-                for i in sorted(idx, reverse=True):
-                    if 0 <= i < len(p.clips):
-                        del p.clips[i]
-            elif kind == "subtitle":
-                gone = set(idx)
-                detach_takes(p, gone)
-                p.subtitle.items = [x for x in ensure_items(p) if x.index not in gone]
-            elif kind == "take":
-                for i in sorted(idx, reverse=True):
-                    if 0 <= i < len(p.dubbing.takes):
-                        p.dubbing.takes.pop(i)
-            elif kind == "transition":
-                for i in idx:
-                    if 0 < i < len(p.clips):
-                        p.clips[i].transition = Transition("none", 0.0)
-        self.model.edit(fn)
-        self.model.select("")
-        msg = {"clip": f"클립 {len(idx)}개를 지우고 뒤 클립을 당겨 붙였습니다",
-               "subtitle": f"자막 {len(idx)}줄을 지웠습니다",
-               "take": f"더빙 조각 {len(idx)}개를 지웠습니다 (원본 파일은 그대로)",
-               "transition": f"전환 {len(idx)}개를 없앴습니다"}.get(kind, "지웠습니다")
-        self.statusBar().showMessage(f"🗑 {msg} (Ctrl+Z 로 되돌리기)", 5000)
-        return True
-
-    def set_mark_in(self, t: Optional[float] = None):
-        c = self.timeline.canvas
-        t = round(self.player.position() if t is None else t, 3)
-        c.set_marks(t, c.mark_out if c.mark_out is not None and c.mark_out > t else None)
-        self._update_cut_buttons()
-        self.statusBar().showMessage(f"In {fmt_time(t)} — 이제 Out(O)을 표시하세요", 4000)
-
-    def set_mark_out(self, t: Optional[float] = None):
-        c = self.timeline.canvas
-        t = round(self.player.position() if t is None else t, 3)
-        c.set_marks(c.mark_in if c.mark_in is not None and c.mark_in < t else None, t)
-        self._update_cut_buttons()
-        self.statusBar().showMessage(f"Out {fmt_time(t)}", 4000)
-
-    def clear_marks(self):
-        self.timeline.canvas.set_marks(None, None)
-        self._update_cut_buttons()
-
-    def cut_marked_range(self) -> bool:
-        """✂ 구간 잘라내기: In~Out 을 클립에서 빼고 당김(선택: 자막·더빙도 함께). 되돌리기 한 번."""
-        from ..edit_ops import cut_range
-        from ..timeline import build_timeline
-        from ..tracks import locked
-        c = self.timeline.canvas
-        if c.mark_in is None or c.mark_out is None:
-            self.statusBar().showMessage("먼저 In(I)과 Out(O)을 표시하세요", 5000)
-            return False
-        if self._locked_msg("clip"):
-            return False
-        a, b = c.mark_in, c.mark_out
-        allt = self.chk_all_tracks.isChecked()
-        skip = {k for k in ("subtitle", "dubbing") if locked(self.model.project, k)}
-        box = {}
-
-        def fn(p):
-            box["r"] = cut_range(p, lambda: build_timeline(p, self.model.duration_of), a, b, allt, self._file_len, skip)
-        self.model.edit(fn)
-        removed, note = box.get("r", (0.0, ""))
-        if removed <= 0:
-            self.statusBar().showMessage("잘라낼 클립이 없습니다", 5000)
-            return False
-        self.clear_marks()
-        self.model.select("")
-        self.player.seek(min(a, b))
-        extra = " (잠긴 트랙은 그대로)" if allt and skip else ""
-        self.statusBar().showMessage(f"✂ {removed:.2f}초를 잘라내고 당겼습니다: {note}{extra} — Ctrl+Z 로 되돌리기", 8000)
-        return True
 
     def _timeline_menu(self, gpos, t: float):
         from PySide6.QtWidgets import QMenu
@@ -846,43 +609,7 @@ class MainWindow(QMainWindow):
         self._last_menu = m
         m.popup(gpos)
 
-    def _apply_track_audio(self):
-        """🔇/S: 미리보기 소리 크기만 바꿉니다(다시 렌더 없음). 배경음악 WAV 는 설정이 바뀌면 다시 만듦."""
-        from ..tracks import audible
-        p = self.model.project
-        self.player.set_track_gain(1.0 if audible(p, "clips") else 0.0)  # → _apply_bgm_volume 도 불림
-        self.bgm_live.update(p, self.model.timeline.total)
-        self._sync_bgm()
-
-    def _apply_bgm_volume(self):
-        from ..tracks import audible
-        if not hasattr(self, "bgm_live"):
-            return
-        self.bgm_live.set_volume(self.player.vol.value() / 100.0 * self.player._base_volume
-                                 * (1.0 if audible(self.model.project, "bgm") else 0.0))
-
     BGM_PREP = "♪ 배경음악 준비 중… (잠시 뒤 함께 들려요)"
-
-    def _bgm_building(self, on: bool):
-        if on and self.player.is_playing():
-            self.statusBar().showMessage(self.BGM_PREP)
-        elif not on and self.statusBar().currentMessage() == self.BGM_PREP:
-            self.statusBar().clearMessage()
-
-    def _bgm_failed(self, err: str):
-        first = (err or "").strip().splitlines()[0] if (err or "").strip() else "알 수 없는 오류"
-        self.statusBar().showMessage(f"⚠ 배경음악을 미리보기에서 틀 준비를 하지 못했어요: {first} "
-                                     "— 재생을 다시 누르면 한 번 더 해 봐요 (내보내기에는 영향 없음)", 12000)
-
-    def _bgm_on_play(self, playing: bool):
-        if not playing:
-            return
-        self.bgm_live.retry_if_failed(self.model.project, self.model.timeline.total)
-        if self.bgm_live.building:
-            self.statusBar().showMessage(self.BGM_PREP)
-
-    def _sync_bgm(self):
-        self.bgm_live.sync(self.player.position(), self.player.is_playing())
 
     def _locked_msg(self, kind: str) -> bool:
         """잠긴 트랙이면 상태 표시줄에 알리고 True."""
@@ -893,28 +620,6 @@ class MainWindow(QMainWindow):
             return True
         return False
 
-    def nudge_selected(self, d: float):
-        from ..subtitles import move_item
-
-        from ..subtitles import ensure_items
-
-        s = self.model.selection
-        if self._locked_msg(s.kind):
-            return
-        if s.kind == "subtitle":
-            def fn(p):
-                its = [x for x in ensure_items(p) if x.index in s.indices]
-                dd = max(d, -min((x.start for x in its), default=0.0))  # 함께 고른 것 모두 0초 밑으로 안 가게
-                for x in its:
-                    move_item(p, x.index, dd)
-            self.model.edit(fn, "nudge")
-        elif s.kind == "take":
-            takes = self.model.project.dubbing.takes
-            idx = [i for i in s.indices if 0 <= i < len(takes)]
-            self.model.edit(lambda p: [setattr(takes[i], "offset", round(takes[i].offset + d, 3)) for i in idx], "nudge")
-        elif s.kind == "bgm":
-            self.model.edit(lambda p: setattr(p.bgm, "start_offset", max(0.0, round(p.bgm.start_offset + d, 3))), "nudge")
-
     # ------------------------------------------------------------------ 상태
     def show_output_tab(self):
         self.right.setCurrentWidget(self.output_scroll)
@@ -924,132 +629,10 @@ class MainWindow(QMainWindow):
         self.right.setCurrentWidget(self.sub_scroll)
         self.style_panel.sample.replay()
 
-    def _cue_at(self, t: float):
-        if self.model.project.tracks.subtitle.hidden:  # 👁 자막 트랙 감춤
-            return None
-        c = self.model.cue_timeline.current(t)
-        if not c:
-            return None
-        return c.text, t - c.start, c.end - t, c.end - c.start, c.style
-
-    def _subtitle_at(self, t: float) -> str:
-        if self.model.project.tracks.subtitle.hidden:
-            return ""
-        c = self.model.cue_timeline.current(t)
-        return c.text if c else ""
-
     # ------------------------------------------------------------------ 미리보기 없는 재생
-    def _placeholder_at(self, t: float):
-        """미리보기 영상이 없을 때 화면에 보여 줄 현재 클립의 그림 (key, QPixmap)."""
-        from PySide6.QtGui import QPixmap
-
-        if self.model.project.tracks.clips.hidden:  # 👁 클립 감춤 → 검은 화면
-            return ("hidden",), None
-        tm = self.model.timeline.clip_at(t)
-        if tm is None and self.model.timeline.clips:
-            tm = self.model.timeline.clips[-1] if t >= self.model.timeline.total else self.model.timeline.clips[0]
-        if tm is None:
-            return None, None
-        clip = self.model.project.clips[tm.index]
-        path = self.model.project.resolve(clip.file)
-        if not path or not path.exists():
-            return ("missing", tm.index), None
-        st = path.stat()
-        key = (str(path), st.st_mtime, round(tm.source_in, 2))
-        if key not in self._thumbs:
-            pix = QPixmap()
-            if clip.type == "image":
-                pix.load(str(path))
-            else:
-                thumb = self._video_thumbnail(path, tm.source_in + min(0.5, max(0.0, tm.source_out - tm.source_in) / 2))
-                if thumb:
-                    pix.load(str(thumb))
-            self._thumbs[key] = pix
-        return key, self._thumbs[key]
-
-    def _video_thumbnail(self, path: Path, at: float) -> Optional[Path]:
-        import hashlib
-
-        from ..probe import ffmpeg_path, popen_kwargs
-
-        d = cache_dir(self.model.project) / "thumbs"
-        d.mkdir(parents=True, exist_ok=True)
-        st = path.stat()
-        h = hashlib.sha1(f"{path}|{st.st_size}|{st.st_mtime}|{at:.2f}".encode()).hexdigest()[:16]
-        out = d / f"{h}.jpg"
-        if not out.exists():
-            try:
-                subprocess.run([ffmpeg_path(), "-v", "error", "-y", "-ss", f"{at:.3f}", "-i", str(path), "-frames:v", "1",
-                                "-vf", "scale=960:-2", str(out)], timeout=15, capture_output=True, **popen_kwargs())
-            except Exception:  # noqa: BLE001
-                return None
-        return out if out.exists() else None
-
-    def ask_play_without_preview(self) -> str:
-        """'render' | 'play' | 'cancel' (테스트에서 바꿔 끼울 수 있음)."""
-        box = QMessageBox(QMessageBox.Question, "미리보기 없음",
-                          "아직 미리보기 영상이 없습니다.\n\n"
-                          "• 미리보기 만들기(F5): 전환·움직임·소리까지 실제 결과로 확인\n"
-                          "• 영상 없이 재생: 클립 그림과 자막·카운트다운만 타임라인 시간에 맞춰 재생(더빙 연습용)",
-                          QMessageBox.NoButton, self)
-        b_render = box.addButton("미리보기 만들기 (F5)", QMessageBox.AcceptRole)
-        b_play = box.addButton("영상 없이 재생", QMessageBox.ActionRole)
-        box.addButton("취소", QMessageBox.RejectRole)
-        box.setDefaultButton(b_render)
-        box.exec()
-        return "render" if box.clickedButton() is b_render else "play" if box.clickedButton() is b_play else "cancel"
-
-    def _before_play(self) -> bool:
-        """미리보기 영상 없이 재생을 누르면 한 번 묻습니다(프로젝트마다 한 번)."""
-        if self._play_without_preview_ok or not self.model.project.clips:
-            return True
-        if self.auto.enabled and (self.auto.busy or self._preview_ready_to_render()):
-            if not self.auto.busy:
-                self.auto.request()
-            return True  # 미리보기는 만드는 중 — 준비되면 재생 중에 자동으로 바뀜
-        choice = self.ask_play_without_preview()
-        if choice == "render":
-            QTimer.singleShot(0, self.render_preview)
-            return False
-        if choice == "play":
-            self._play_without_preview_ok = True
-            self.statusBar().showMessage("미리보기 영상 없이 타임라인 시간으로 재생합니다 (F5 = 미리보기 만들기)", 6000)
-            return True
-        return False
-
     def _title(self):
         name = self.model.path.name if self.model.path else getattr(self, "untitled_name", "제목 없음")
         self.setWindowTitle(f"{name}{' *' if self.model.dirty else ''} — {APP_NAME}")
-
-    def remove_all_subtitles(self) -> bool:
-        """프로젝트에서 자막을 모두 뺍니다. 디스크의 자막 파일은 절대 지우지 않습니다."""
-        from ..subtitles import clear_subtitles, has_subtitles
-
-        if not has_subtitles(self.model.project) or self._locked_msg("subtitle"):
-            return False
-        if not self.confirm("자막 전체 제거", "프로젝트에서 자막을 모두 뺄까요? 원본 SRT 파일은 지워지지 않습니다."):
-            return False
-        holder = {}
-        self.model.edit(lambda p: holder.setdefault("n", clear_subtitles(p)))  # 한 번의 실행 취소
-        if self.model.selection.kind == "subtitle":
-            self.model.select("")
-        self.player.refresh_overlay()
-        n = holder.get("n", 0)
-        self.statusBar().showMessage("자막을 모두 뺐습니다 (Ctrl+Z 로 되돌리기)"
-                                     + (f" · 더빙 {n}개는 지금 위치에 고정" if n else ""), 8000)
-        return True
-
-    def remove_bgm(self) -> bool:
-        """프로젝트에서 배경음악을 뺍니다. 디스크의 음악 파일은 절대 지우지 않습니다."""
-        if not self.model.project.bgm.file or self._locked_msg("bgm"):
-            return False
-        if not self.confirm("배경음악 제거", "프로젝트에서 배경음악을 뺄까요? 원본 음악 파일은 지워지지 않습니다."):
-            return False
-        self.model.edit(lambda p: setattr(p.bgm, "file", None))  # 한 번의 실행 취소, 다른 설정(볼륨 등)은 남김
-        if self.model.selection.kind == "bgm":
-            self.model.select("")
-        self.statusBar().showMessage("배경음악을 뺐습니다 (Ctrl+Z 로 되돌리기)", 8000)
-        return True
 
     def _on_changed(self):
         from ..subtitles import has_subtitles
@@ -1063,9 +646,9 @@ class MainWindow(QMainWindow):
         self.player._placeholder_key = None  # 클립이 바뀌었을 수 있으므로 그림 다시 고르기
         self.player.set_subtitle_style(self.model.project.subtitle.style, self.model.project.output.height)
         self.player.refresh_overlay()
-        if self.preview_is_direct and not self._direct_source():
-            self.preview_is_direct = False
-            self.preview_revision = -1
+        if self.preview.preview_is_direct and not self.preview._direct_source():
+            self.preview.preview_is_direct = False
+            self.preview.preview_revision = -1
         self._update_notice()
 
     def _update_notice(self):
@@ -1088,7 +671,7 @@ class MainWindow(QMainWindow):
                 self.player.set_notice("미리보기 준비 중… 그동안 타임라인 시간으로 재생됩니다(클립 그림 + 자막)")
             else:
                 self.player.set_notice("미리보기 영상 없음 — 타임라인 시간으로 재생(클립 그림 + 자막). 🔄 미리보기 새로 만들기")
-        elif self.preview_revision != self._render_revision_key():
+        elif self.preview.preview_revision != self.preview._render_revision_key():
             if auto and self.auto.hold and not busy:
                 self.player.set_notice("효과를 고르는 중 — 다른 탭으로 가거나 ▶ 재생하면 미리보기 영상을 새로 만들어요 (위 그림이 효과 미리보기)")
             elif busy:
@@ -1097,19 +680,6 @@ class MainWindow(QMainWindow):
                 self.player.set_notice("화면이 최신 편집과 다릅니다 — 🔄 미리보기 새로 만들기 (자막·더빙은 바로 반영됨)")
         else:
             self.player.set_notice("")
-
-    def _render_revision_key(self):
-        """미리보기 영상에 영향을 주는 값(자막·더빙 제외)만으로 비교합니다."""
-        d = self.model.project.to_dict()
-        d.pop("subtitle", None)
-        d.pop("dubbing", None)
-        d.pop("title", None)
-        d.pop("bgm", None)  # 배경음악은 따로 만든 WAV 를 같이 틂 (bgm_live)
-        d["tracks"] = {"clips_hidden": d["tracks"]["clips"]["hidden"]}  # 🔇/S 는 소리 크기로 바로 반영
-        d["output"].pop("file", None)
-        for c in d.get("clips", []):
-            c.pop("label", None)
-        return hash(str(d))
 
     def _on_selection(self):
         s = self.model.selection
@@ -1127,56 +697,6 @@ class MainWindow(QMainWindow):
         if s.kind == "clip" and s.count == 1 and 0 <= s.index < len(self.model.timeline.clips) and not self.player.is_playing():
             self.player.seek(self.model.timeline.clips[s.index].start)
 
-    def _direct_source(self) -> Optional[Path]:
-        """영상 하나뿐이고 변형이 없으면 렌더 없이 원본을 바로 미리보기."""
-        p = self.model.project
-        if len(p.clips) != 1 or p.tracks.clips.hidden:
-            return None
-        c = p.clips[0]
-        if c.type != "video" or c.trim_start or c.trim_end or c.fit_duration or abs(c.speed - 1) > 1e-6:
-            return None
-        from ..effects import has_effects
-        if has_effects(c) or (c.motion != "none" and c.motion_strength > 0) or p.output.fade_in > 0 or p.output.fade_out > 0:
-            return None  # ✨ 효과·움직임·페이드가 있으면 미리보기를 만들어야 보임
-        return p.resolve(c.file)
-
-    def _load_preview_for_project(self):
-        src = self._direct_source()
-        self.preview_is_direct = bool(src and src.exists())
-        if self.preview_is_direct:
-            self.player.load(src, keep_position=False)
-        else:
-            self.player.load(None)
-            self.preview_revision = -1
-            if not self.auto.enabled:
-                # 자동 미리보기를 끈 경우에만 예전 미리보기라도 보여 줌
-                old = sorted(cache_dir(self.model.project).glob("preview_*.mp4"), key=lambda p: p.stat().st_mtime)
-                if old:
-                    self.player.load(old[-1], keep_position=False)
-            else:
-                self.auto.request()  # 열자마자 자동으로 만들기
-        self._update_notice()
-
-    # ------------------------------------------------------------------ 파일
-    def maybe_save(self) -> bool:
-        """저장 안 한 변경이 있으면 한 번만 묻습니다(저장 / 저장 안 함 / 취소).
-        아무 내용도 없는 '제목 없음' 프로젝트는 묻지 않습니다."""
-        if not self.model.dirty:
-            return True
-        from ..ai_apply import is_blank
-        if is_blank(self.model.project, self.model.path is not None):
-            return True
-        box = QMessageBox(QMessageBox.Question, "저장", "현재 프로젝트의 변경 내용을 저장할까요?",
-                          QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, self)
-        box.button(QMessageBox.Save).setText("저장")
-        box.button(QMessageBox.Discard).setText("저장 안 함")
-        box.button(QMessageBox.Cancel).setText("취소")
-        box.setDefaultButton(QMessageBox.Save)
-        r = self.ask_save_changes(box)
-        if r == QMessageBox.Save:
-            return self.save()
-        return r == QMessageBox.Discard
-
     def ask_save_changes(self, box: QMessageBox):
         """질문 창 표시 (테스트에서 바꿔 끼울 수 있음)."""
         return box.exec()
@@ -1192,14 +712,10 @@ class MainWindow(QMainWindow):
 
     def shutdown(self):
         """멀티미디어 객체를 앱 종료 전에 정리합니다(종료 시 크래시 방지)."""
-        self.auto.enabled = False
-        self.auto.timer.stop()
+        if hasattr(self, "preview"):
+            self.preview.shutdown()
         if hasattr(self, "bgm_live"):
             self.bgm_live.shutdown()
-        w = getattr(self, "_preview_worker", None)
-        if w is not None and w.isRunning():
-            w.cancel()
-            w.wait(10000)
         self.dub.recorder.close()
         self.dub.stop_live()
         self.player.player.stop()
@@ -1216,56 +732,9 @@ class MainWindow(QMainWindow):
         if self.model.migrated:
             self.statusBar().showMessage("예전 형식 프로젝트를 새 전환 방식(경계 가운데)으로 바꿨습니다 — 보이는 시간은 그대로이고, "
                                          "저장하면 새 형식으로 저장됩니다.", 12000)
-        self._load_preview_for_project()
-
-    def open_prompt_dialog(self, tab: int = 0):
-        if not isinstance(tab, int):
-            tab = 0
-        folder = self.model.project.base_dir if self.model.path or self.model.project.clips else None
-        dlg = PromptDialog(folder, self)
-        dlg.tabs.setCurrentIndex(tab)
-        dlg.apply_requested.connect(self.apply_ai_result)
-        dlg.exec()
-
-    def apply_ai_result(self, data: dict, folder: Path):
-        """검사를 통과한 AI 결과를 현재 타임라인에 반영합니다. 질문 창 없음 — Ctrl+Z 한 번으로 되돌림.
-        저장된 프로젝트라면 파일 경로를 유지하므로 Ctrl+S 는 같은 파일에 저장합니다."""
-        from ..ai_apply import apply_ai_result, is_blank
-
-        self.dub.stop_live()
-        blank = is_blank(self.model.project, self.model.path is not None)
-        new = apply_ai_result(self.model.project, data, folder, keep_base=not blank)
-        if blank:
-            # 아무것도 없는 '제목 없음' 프로젝트: AI 폴더를 작업 폴더로 (되돌리면 다시 그 상태)
-            self.untitled_name = "AI 프로젝트"
-        self.model.replace_project(new)  # 한 번의 실행 취소 단계
-        self.model.select("")
-        self._load_preview_for_project()  # 이전 미리보기는 '최신 아님'으로 표시
-        self._title()
-        msg = "AI 구성을 타임라인에 반영했습니다. 미리보기를 자동으로 만드는 중입니다. 되돌리려면 Ctrl+Z"
-        if self.model.path is None:
-            msg += " · 저장하려면 Ctrl+S"
-        self.statusBar().showMessage(msg, 15000)
-
-    def new_project(self):
-        """새로 만들기: 폴더를 묻지 않고 '제목 없음' 프로젝트를 엽니다.
-        작업 폴더는 처음 추가하는 미디어 파일의 폴더로 자동으로 정해지고, 처음 저장할 때 저장 위치 기준으로 경로를 다시 씁니다."""
-        if not self.maybe_save():
-            return
-        self.set_project(Project(base_dir=Path.home()), None)
-        self.statusBar().showMessage(EMPTY_HINT, 8000)
+        self.preview.load_for_project()
 
     # ------------------------------------------------------------------ 최근 파일
-    def recent_files(self) -> list:
-        v = self.settings.value("file/recent", [])
-        if isinstance(v, str):
-            v = [v] if v else []
-        return [str(x) for x in (v or [])]
-
-    def add_recent(self, path):
-        items = [str(Path(path))] + [x for x in self.recent_files() if Path(x) != Path(path)]
-        self.settings.setValue("file/recent", items[:10])
-
     def _fill_recent_menu(self):
         m = self.recent_menu
         m.clear()
@@ -1279,15 +748,6 @@ class MainWindow(QMainWindow):
             a.triggered.connect(lambda _=False, f=f: self.open_recent(f))
         m.addSeparator()
         m.addAction("목록 지우기").triggered.connect(lambda: self.settings.setValue("file/recent", []))
-
-    def open_recent(self, f: str):
-        p = Path(f)
-        if not p.exists():
-            QMessageBox.information(self, "최근 파일", f"파일을 찾을 수 없어 목록에서 뺍니다:\n{p}")
-            self.settings.setValue("file/recent", [x for x in self.recent_files() if Path(x) != p])
-            return
-        if self.maybe_save():
-            self.load_path(p)
 
     def open_video_for_dubbing(self):
         if not self.maybe_save():
@@ -1319,328 +779,25 @@ class MainWindow(QMainWindow):
         self.dub.ensure_devices()
         self.model.save(vp.parent / f"{vp.stem}_dubbing.json")
 
-    def open_project(self):
-        if not self.maybe_save():
-            return
-        f, _ = QFileDialog.getOpenFileName(self, "열기", "", "프로젝트 (*.json)")
-        if f:
-            self.load_path(Path(f))
-
-    def load_path(self, path: Path):
-        import json
-
-        try:
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except Exception as e:  # noqa: BLE001
-            QMessageBox.critical(self, "열기 실패", f"JSON 을 읽을 수 없습니다.\n{e}")
-            return
-        issues = validate_project(data, path.parent)
-        if has_errors(issues):
-            QMessageBox.warning(self, "프로젝트 확인", "문제가 있지만 열어 둡니다:\n\n" + "\n".join(map(str, issues[:20])))
-        self.set_project(Project.from_dict(data, base_dir=path.parent), path)
-        self.add_recent(path)
-
-    def save(self) -> bool:
-        if self.model.path is None:
-            return self.save_as()
-        self.model.save()
-        self.add_recent(self.model.path)
-        self.statusBar().showMessage(f"저장됨: {self.model.path}", 4000)
-        return True
-
-    def save_as(self) -> bool:
-        # 저장된 적 없는 프로젝트는 미디어 폴더의 project.json 을 기본값으로 제안
-        default = self.model.path or (Path(self.model.project.base_dir) / "project.json")
-        title = "프로젝트 저장" if self.model.path is None else "다른 이름으로 저장"
-        f, _ = QFileDialog.getSaveFileName(self, title, str(default), "프로젝트 (*.json)")
-        if not f:
-            return False
-        self.model.save(Path(f))  # 상대 경로는 저장 위치 기준으로 다시 계산됨
-        self.add_recent(Path(f))
-        self.statusBar().showMessage(f"저장됨: {f}", 4000)
-        return True
-
-    def add_clips(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "클립 추가 (여러 개 선택 가능 — 다음 창에서 순서를 정함)",
-                                                str(self.model.project.base_dir), MEDIA_FILTER)
-        if files:
-            self.handle_drop([Path(f) for f in files], None)
-
     # ------------------------------------------------------------------ 드래그 앤 드롭
     def dragEnterEvent(self, ev):
-        if paths_from_mime(ev.mimeData()):
-            ev.setDropAction(Qt.CopyAction)
-            ev.accept()
-        else:
-            ev.ignore()
+        self.media_ctrl.drag_enter(ev)
 
     def dragMoveEvent(self, ev):
-        self.dragEnterEvent(ev)
+        self.media_ctrl.drag_move(ev)
 
     def dropEvent(self, ev):
-        paths = paths_from_mime(ev.mimeData())
-        if paths:
-            ev.setDropAction(Qt.CopyAction)
-            ev.accept()
-            self._drop_later(paths, None)
+        self.media_ctrl.drop(ev)
 
     def _drop_later(self, paths, index):
-        QTimer.singleShot(0, lambda: self.handle_drop(list(paths), index))
-
-    def confirm(self, title: str, text: str) -> bool:
-        """예/아니요 질문 (테스트에서 바꿔 끼울 수 있음)."""
-        return QMessageBox.question(self, title, text) == QMessageBox.Yes
-
-    def notify(self, text: str, warning: bool = False) -> None:
-        self.last_drop_report = text
-        self.statusBar().showMessage(text.split("\n")[0], 8000)
-        if warning:
-            QMessageBox.information(self, "가져오기", text)
-
-    def ask_media_order(self, files: list, dropped: list):
-        """'순서 정하기' 창. 정한 순서(list[Path]) 또는 취소면 None. (테스트에서 바꿔 끼울 수 있음)"""
-        from .order_dialog import OrderDialog
-
-        dlg = OrderDialog(files, dropped, self)
-        ok = dlg.exec() == OrderDialog.Accepted
-        if ok and dlg.skip_next.isChecked():
-            self.image_defaults.skip_order.setChecked(True)
-        order = dlg.result_order if ok else None
-        dlg.deleteLater()
-        return order
-
-    def handle_drop(self, paths: list, index: Optional[int] = None) -> None:
-        """탐색기에서 끌어온 파일/폴더 처리. index 는 클립 삽입 위치(None = 끝에 추가)."""
-        from ..importer import classify_paths, describe_unsupported, guess_base_dir, insert_media, rel_path
-
-        plan = classify_paths(paths)
-        notes: list[str] = []
-        # 프로젝트(.json)만 놓았으면 그 프로젝트를 엽니다.
-        if plan.projects and not (plan.media or plan.subtitles or plan.audio):
-            if len(plan.projects) > 1:
-                notes.append(f"프로젝트는 하나만 열 수 있어 {plan.projects[0].name} 만 엽니다.")
-            if self.maybe_save():
-                self.load_path(plan.projects[0])
-                notes.insert(0, f"프로젝트를 열었습니다: {plan.projects[0].name}")
-            if plan.unsupported:
-                notes.append(describe_unsupported(plan.unsupported))
-            self.notify("\n".join(notes), warning=bool(plan.unsupported) or len(plan.projects) > 1)
-            return
-        if plan.projects:
-            notes.append(f"프로젝트 파일({', '.join(p.name for p in plan.projects)})은 다른 파일과 함께 놓으면 열지 않습니다. 따로 끌어 놓으세요.")
-
-        tr = self.model.project.tracks  # 🔒 잠긴 트랙에는 넣지 않음
-        if plan.media and tr.clips.locked:
-            notes.append(f"🔒 클립 트랙이 잠겨 있어 이미지·동영상 {len(plan.media)}개를 넣지 않았습니다.")
-            plan.media, plan.media_given = [], []
-        if plan.subtitles and tr.subtitle.locked:
-            notes.append("🔒 자막 트랙이 잠겨 있어 자막 파일을 넣지 않았습니다.")
-            plan.subtitles = []
-        if plan.audio and tr.bgm.locked:
-            notes.append("🔒 배경음악 트랙이 잠겨 있어 음악 파일을 넣지 않았습니다.")
-            plan.audio = []
-
-        p = self.model.project
-        if not p.clips and self.model.path is None and not p.subtitle.file and not p.bgm.file:
-            base = guess_base_dir(plan)  # 처음 추가하는 미디어의 폴더 = 작업 폴더
-            if base is not None:
-                p.base_dir = base
-        changed = False
-        if len(plan.media) >= 2 and not self.image_defaults.skip_order.isChecked():
-            order = self.ask_media_order(plan.media, plan.media_given)
-            if order is None:
-                self.statusBar().showMessage("넣기를 취소했습니다", 4000)
-                return
-            plan.media = order
-        if plan.media:
-            inserted = insert_media(p, plan.media, index, self.image_defaults.image_duration.value(),
-                                    self.image_defaults.image_motion.currentData())
-            where = "끝에" if index is None or index >= len(p.clips) - len(inserted) else f"{inserted[0] + 1}번 자리에"
-            notes.insert(0, f"클립 {len(inserted)}개를 {where} 추가했습니다.")
-            changed = True
-        if plan.subtitles:
-            sub = plan.subtitles[0]
-            p.subtitle.file = rel_path(p, sub)
-            p.subtitle.items = None
-            notes.append(f"자막을 {sub.name} 로 설정했습니다.")
-            if len(plan.subtitles) > 1:
-                notes.append(f"자막은 하나만 쓸 수 있어 나머지 {len(plan.subtitles) - 1}개는 무시했습니다.")
-            changed = True
-        if plan.audio:
-            music = plan.audio[0]
-            rel = rel_path(p, music)
-            if p.bgm.file and p.bgm.file != rel:
-                ok = self.confirm("배경음악", f"이미 배경음악({p.bgm.file})이 있습니다.\n{music.name} 로 바꿀까요?")
-            else:
-                ok = True
-            if ok:
-                p.bgm.file = rel
-                notes.append(f"배경음악을 {music.name} 로 설정했습니다.")
-                changed = True
-            else:
-                notes.append("배경음악은 그대로 두었습니다.")
-            if len(plan.audio) > 1:
-                notes.append(f"배경음악은 하나만 쓸 수 있어 나머지 {len(plan.audio) - 1}개는 무시했습니다.")
-        if plan.unsupported:
-            notes.append(describe_unsupported(plan.unsupported))
-        if plan.empty and not plan.unsupported:
-            notes.append("추가할 수 있는 파일이 없습니다.")
-        if changed:
-            self.model.commit()  # 한 번의 드롭 = 한 번의 실행 취소
-            if plan.media:
-                self.model.select("clip", inserted[0])
-        self.notify("\n".join(notes), warning=bool(plan.unsupported) or (plan.empty and not changed))
+        self.media_ctrl._drop_later(paths, index)
 
     def validate_current(self):
         issues = validate_project(self.model.project.to_dict(), self.model.project.base_dir)
         QMessageBox.information(self, "검사 결과", "문제 없음 ✔" if not issues else "\n".join(map(str, issues[:30])))
 
     # ------------------------------------------------------------------ 렌더
-    def _check_renderable(self) -> bool:
-        if not self.model.project.clips:
-            QMessageBox.information(self, "내보내기", "클립이 없습니다. 이미지·동영상을 먼저 넣으세요.")
-            return False
-        issues = [i for i in validate_project(self.model.project.to_dict(), self.model.project.base_dir)
-                  if i.severity == "error"]
-        if issues:
-            QMessageBox.warning(self, "아직 만들 수 없습니다", "\n".join(map(str, issues[:20])))
-            return False
-        return True
-
     # ------------------------------------------------------------------ 자동 미리보기
-    def render_preview(self):
-        """F5 / '🔄 미리보기 새로 만들기': 지금 바로 백그라운드로 다시 만듭니다."""
-        if not self._check_renderable():
-            return
-        if self._direct_source():
-            self._load_preview_for_project()
-            return
-        self.auto.request(force=True)
-
-    def _preview_ready_to_render(self) -> bool:
-        p = self.model.project
-        if not p.clips or self._direct_source():
-            return False
-        return not any(i.severity == "error" for i in validate_project(p.to_dict(), p.base_dir))
-
-    def _start_preview_worker(self, key):
-        """AutoPreview 가 호출: 360p 초안을 백그라운드로 렌더 (바뀐 클립만 다시 만듦)."""
-        if not self._preview_ready_to_render():
-            n = len([i for i in validate_project(self.model.project.to_dict(), self.model.project.base_dir)
-                     if i.severity == "error"])
-            if n:
-                self.player.set_notice(f"미리보기를 만들 수 없습니다: 문제 {n}개 (편집 ▸ 검사하기)")
-            QTimer.singleShot(0, lambda: self.auto.on_finished(key, False))
-            return
-        proj = self.model.project.copy()
-        proj.dubbing.takes = []  # 더빙은 미리보기에서 실시간으로 재생
-        proj.subtitle = SubtitleSettings()  # 자막은 화면 위에 실시간으로 그림
-        proj.bgm.file = None  # 배경음악은 따로 (bgm_live)
-        for ts in (proj.tracks.clips, proj.tracks.subtitle, proj.tracks.dubbing, proj.tracks.bgm):
-            ts.muted = ts.solo = False  # 소리 켜고 끄기는 재생 볼륨으로
-        proj.tracks.subtitle.hidden = False
-        self._preview_seq += 1
-        out = cache_dir(proj) / f"preview_{self._preview_seq % 2}.mp4"
-        if self.player.media_path is not None and Path(self.player.media_path) == out:
-            self._preview_seq += 1
-            out = cache_dir(proj) / f"preview_{self._preview_seq % 2}.mp4"
-        worker = RenderWorker(proj, out, RenderSettings(draft=True, encoder="auto"))
-        self._preview_worker = worker
-        worker.progress.connect(lambda f, m: self._preview_progress(f))
-        worker.finished_ok.connect(lambda res, k=key, o=out, w=worker: self._preview_done(w, k, o, True))
-        worker.failed.connect(lambda msg, log, k=key, o=out, w=worker: self._preview_failed(w, k, msg))
-        worker.cancelled.connect(lambda k=key, o=out, w=worker: self._preview_done(w, k, o, False))
-        self._preview_progress(0.0)
-        worker.start()
-
-    def _cancel_preview_worker(self):
-        w = getattr(self, "_preview_worker", None)
-        if w is not None and w.isRunning():
-            w.cancel()
-
-    def _preview_progress(self, f: float):
-        self.player.set_progress(f"미리보기 만드는 중… {int(f * 100)}%", f)
-
-    def _preview_done(self, worker, key, out: Path, ok: bool):
-        worker.wait(3000)
-        if getattr(self, "_preview_worker", None) is worker:
-            self._preview_worker = None
-        self.player.set_progress("", None)
-        if ok and out.exists():  # 조금 지난 결과라도 예전 것보다는 최신 → 바꾸고, 필요하면 AutoPreview 가 다시 만듦
-            old = self.player.media_path
-            self.preview_is_direct = False
-            self.preview_revision = key
-            self.player.load(out, keep_position=True, resume=True)  # 재생 위치·재생 상태 유지하며 교체
-            if old and Path(old) != out and Path(old).name.startswith("preview_"):
-                QTimer.singleShot(1500, lambda p=Path(old): p.unlink(missing_ok=True) if self.player.media_path != p else None)
-            self.statusBar().showMessage("미리보기를 새로 만들었습니다", 3000)
-        self.auto.on_finished(key, ok and out.exists())
-        self._update_notice()
-
-    def _preview_failed(self, worker, key, msg: str):
-        worker.wait(3000)
-        if getattr(self, "_preview_worker", None) is worker:
-            self._preview_worker = None
-        self.player.set_progress("", None)
-        self.statusBar().showMessage(f"미리보기 실패: {msg}", 10000)
-        self.auto.on_finished(key, False)
-        self.player.set_notice("미리보기를 만들지 못했습니다 — 🔄 미리보기 새로 만들기 로 다시 시도 (자세한 내용은 상태 표시줄)")
-
-    def _on_auto_toggled(self, on: bool):
-        self.auto.enabled = on
-        self.settings.setValue("view/auto_preview", on)
-        if on:
-            self.auto.notify_changed()
-        self._update_notice()
-
-    def _overlap_ok(self) -> bool:
-        """겹친 더빙 조각이 있으면 한 번 묻기 (계속 = True)."""
-        from ..edit_ops import take_overlaps
-        p = self.model.project
-        if p.tracks.dubbing.muted:
-            return True
-        spans, who = take_overlaps(p, self.model.take_file_len)
-        if not who:
-            return True
-        where = ", ".join(f"{fmt_time(a)}~{fmt_time(b)}" for a, b in spans[:3]) + (" …" if len(spans) > 3 else "")
-        return self.confirm("더빙 조각이 겹칩니다",
-                            f"더빙 조각 {len(who)}개가 겹쳐 있어 그 부분은 두 목소리가 동시에 들립니다.\n"
-                            f"겹친 곳: {where} (타임라인 빨간 빗금)\n\n그래도 내보낼까요?")
-
-    def render_final(self):
-        if not self._check_renderable():
-            return
-        if not self._overlap_ok():
-            return
-        default = self.model.project.resolve(self.model.project.output.file or "output.mp4")
-        o = self.model.project.output
-        from ..tracks import off_tracks
-        opt = FinalRenderOptions(default, self, o.width, o.height, o.fps, warnings=off_tracks(self.model.project))
-        if not self.exec_export_options(opt):
-            return
-        w, h, fps = opt.output_size()
-        if (w, h, fps) != (o.width, o.height, float(o.fps)):  # 내보내기 창에서 바꾼 크기·fps → 프로젝트에 반영(실행 취소 1회)
-            def fn(p):
-                p.output.width, p.output.height, p.output.fps = w, h, fps
-            self.model.edit(fn)
-        out = Path(opt.path.text())
-        worker = RenderWorker(self.model.project, out, opt.settings())
-        dlg = ProgressDialog(worker, "영상 내보내기", self)
-        if dlg.exec_worker():
-            res = dlg.result_obj
-            r = QMessageBox.question(self, "내보내기 완료", f"내보내기 완료!\n{out}\n길이 {res.duration:.2f}초 · 새로 만든 클립 "
-                                                   f"{res.clips_rendered}개 · 캐시 사용 {res.clips_cached}개\n\n폴더를 열까요?")
-            if r == QMessageBox.Yes:
-                open_folder(out.parent)
-
-    def open_script_dialog(self):
-        """자막으로 대본 만들기 (인쇄 / PDF / Word / TXT / 클립보드)."""
-        from .script_dialog import ScriptDialog
-        name = self.model.project.title or (self.model.path.stem if self.model.path else "")
-        dlg = ScriptDialog(self.model.project, name, self)
-        self.exec_script_dialog(dlg)
-        dlg.deleteLater()
-
     def exec_script_dialog(self, dlg):
         """(테스트에서 바꿔 끼울 수 있음)"""
         return dlg.exec()
@@ -1648,32 +805,3 @@ class MainWindow(QMainWindow):
     def exec_export_options(self, opt) -> bool:
         """내보내기 설정 창 (테스트에서 바꿔 끼울 수 있음)."""
         return bool(opt.exec())
-
-    def export_voice(self):
-        if not self.model.project.dubbing.takes:
-            QMessageBox.information(self, "내보내기", "녹음된 테이크가 없습니다.")
-            return
-        if not self._overlap_ok():
-            return
-        f, _ = QFileDialog.getSaveFileName(self, "목소리만 WAV로 내보내기", str(self.model.project.base_dir / "voice.wav"), "WAV (*.wav)")
-        if not f:
-            return
-        worker = RenderWorker(self.model.project, Path(f), RenderSettings(), kind="voice")
-        if ProgressDialog(worker, "목소리만 WAV로 내보내기", self).exec_worker():
-            self.statusBar().showMessage(f"저장됨: {f}", 5000)
-
-    def clear_cache(self):
-        self.player.load(None)
-        clear_cache(self.model.project)
-        self.preview_revision = -1
-        self._load_preview_for_project()
-        self.statusBar().showMessage("캐시를 비웠습니다.", 4000)
-
-
-def open_folder(path: Path):
-    if sys.platform == "win32":
-        os.startfile(str(path))  # noqa: S606
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(path)])
-    else:
-        subprocess.Popen(["xdg-open", str(path)])
