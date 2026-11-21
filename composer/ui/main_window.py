@@ -217,6 +217,8 @@ class MainWindow(QMainWindow):
         ins.output_page.export_requested.connect(self.render_final)
         ins.output_page.voice_requested.connect(self.export_voice)
         ins.empty.ai_requested.connect(lambda: self.open_prompt_dialog())
+        self.style_panel.ai_requested.connect(lambda: self.open_prompt_dialog())
+        self.style_panel.btn_empty_file.clicked.connect(lambda: self.inspector.sub_file_panel.pick_sub())
         ins.empty.add_requested.connect(self.add_clips)
         ins.empty.bgm_requested.connect(lambda: self.add_bgm())
         ins.empty.sub_requested.connect(lambda: self.add_subtitle_file())

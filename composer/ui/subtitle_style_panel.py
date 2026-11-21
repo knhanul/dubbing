@@ -13,7 +13,7 @@ from typing import Callable, Optional
 
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QLinearGradient, QPainter, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog, QFontComboBox,
                                QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QListView, QListWidget,
@@ -126,6 +126,8 @@ class ColorButton(QPushButton):
 
 
 class SubtitleStylePanel(QWidget):
+    ai_requested = Signal()
+
     def __init__(self, model: ProjectModel, parent=None, store: Optional[PresetStore] = None):
         super().__init__(parent)
         self.model = model
@@ -145,6 +147,24 @@ class SubtitleStylePanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(10)
+
+        # --- 자막이 없을 때 안내 ---
+        self.empty_box = QWidget()
+        el = QVBoxLayout(self.empty_box)
+        el.setContentsMargins(8, 12, 8, 8)
+        el.setSpacing(6)
+        self.empty_label = QLabel("💬 아직 자막이 없어요")
+        self.empty_label.setStyleSheet("font-size:13px;font-weight:bold;")
+        self.btn_empty_ai = QPushButton("🤖 AI로 구성하기")
+        self.btn_empty_ai.setStyleSheet("font-weight:bold;padding:6px;")
+        self.btn_empty_ai.clicked.connect(self.ai_requested.emit)
+        self.btn_empty_file = QPushButton("자막 파일 불러오기")
+        self.btn_empty_file.setFlat(True)
+        self.btn_empty_file.setStyleSheet("color:#9aa0a6;font-size:11px;")
+        el.addWidget(self.empty_label)
+        el.addWidget(self.btn_empty_ai)
+        el.addWidget(self.btn_empty_file)
+        outer.addWidget(self.empty_box)
 
         # --- 적용 대상: 모든 자막 / 고른 자막만 ---
         self.scope = "all"
@@ -571,6 +591,8 @@ class SubtitleStylePanel(QWidget):
         self.btn_clear_item.setVisible(item and any(c.style for c in self.model.cues if c.index in set(idx)))
 
     def refresh(self):
+        from ..subtitles import has_subtitles
+        self.empty_box.setVisible(not has_subtitles(self.model.project))
         self._refresh_scope()
         st = self.st
         p = self.model.project
