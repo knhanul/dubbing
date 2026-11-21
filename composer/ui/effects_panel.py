@@ -33,8 +33,7 @@ THUMB_W, THUMB_H = 96, 54
 PREVIEW_MAX_W, PREVIEW_MAX_H = 480, 270
 DEBOUNCE_MS = 300
 PREVIEW_SHOW_MAX_H = 150  # 탭 안에서 그림이 차지하는 최대 높이 (옵션이 첫 화면에 보이게)
-PREVIEW_NOTE = ("위 그림은 지금 효과를 모두 합친 모습(내보내기와 같은 필터, 움직임은 빼고 한 장면)이에요. "
-                "슬라이더는 손을 떼면 반영돼요. 미리보기 영상은 이 탭을 떠나거나 ▶ 재생하면 새로 만들어요.")
+PREVIEW_NOTE = ("위 그림은 지금 효과를 모두 합친 모습이에요. 이 클립에만 적용돼요 · 장면 전환은 🛠 선택 탭에서 바꿔요")
 
 
 def effect_params(clip) -> dict:
@@ -434,7 +433,7 @@ class EffectsPanel(QWidget):
         bl.addWidget(self.preview)
 
         # --- 카드 4개: 움직임(맨 위, 사진 영상에서 가장 많이 씀) / 색 필터 / 밝기·색 / 분위기 ---
-        self.sec_motion = FxCard("영상 움직임", key="fx_motion")
+        self.sec_motion = FxCard("영상 움직임", key="fx_motion", default_open=False)
         self.sec_motion.setToolTip("확대 · 이동 (이미지·영상 모두)")
         self.motion = QComboBox()
         for m in MOTIONS:
@@ -463,6 +462,10 @@ class EffectsPanel(QWidget):
             lambda _: self._edit("motion_easing", lambda c: setattr(c, "motion_easing", self.easing.currentData()), None))
 
         self.sec_look = FxCard("색 필터", key="fx_look")
+        self.empty_look_hint = QLabel("👇 색 필터를 눌러 보세요 — 위 그림이 바뀌어요")
+        self.empty_look_hint.setStyleSheet("color:#9aa0a6;font-size:11px;padding:2px 0;")
+        self.empty_look_hint.hide()
+        bl.addWidget(self.empty_look_hint)
         cards = QWidget()
         cards.setStyleSheet("background:transparent")
         grid = QGridLayout(cards)
@@ -495,8 +498,8 @@ class EffectsPanel(QWidget):
 
         self.sliders: dict[str, ValueSlider] = {}
         self.resets: dict[str, QToolButton] = {}
-        self.sec_adjust = FxCard("밝기 · 색", key="fx_adjust")
-        self.sec_mood = FxCard("분위기", key="fx_mood")
+        self.sec_adjust = FxCard("밝기 · 색", key="fx_adjust", default_open=False)
+        self.sec_mood = FxCard("분위기", key="fx_mood", default_open=False)
         for sec, rows in ((self.sec_adjust, ADJUST), (self.sec_mood, MOOD)):
             for name, d, lo, hi, label in rows:
                 # live=False: 끄는 동안은 숫자만, 손을 떼면 한 번 반영 (그때 그림을 다시 만듦)
@@ -653,6 +656,11 @@ class EffectsPanel(QWidget):
         self.btn_all.setEnabled(len(self.model.project.clips) > 1)
         self._update_summaries(c)
         self._loading = False
+        # 효과가 하나도 없을 때만 안내
+        no_fx = (c.look or "none") == "none" and all(
+            abs(float(getattr(c, k, DEFAULTS[k])) - DEFAULTS[k]) < 1e-4 for k in EFFECT_FIELDS if k != "look"
+        )
+        self.empty_look_hint.setVisible(no_fx and not lk)
         self._pending_look = None
         self.btn_apply_look.setEnabled(False)
         self.btn_apply_look.setText("이 색 필터 적용")
