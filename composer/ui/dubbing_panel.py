@@ -219,7 +219,8 @@ class DubbingPanel(QWidget):
             self.mode_group.addButton(b, k)
             seg.addWidget(b, 1)
         self.btn_mode_follow.setChecked(True)
-        self.mode_group.idClicked.connect(self.mode_tabs.setCurrentIndex)
+        self._user_chose_mode = False  # 사용자가 직접 모드를 바꾸면 True
+        self.mode_group.idClicked.connect(self._on_mode_clicked)
         self.mode_tabs.currentChanged.connect(lambda i: self.mode_group.button(i).setChecked(True))
         self.btn_script = QPushButton("📄 대본 출력…")
         self.btn_script.setToolTip("자막·대본을 종이로 보며 녹음하려면 — 인쇄용으로 만들기 (Ctrl+P)")
@@ -260,6 +261,20 @@ class DubbingPanel(QWidget):
         self.refresh_table()
 
     # --- 장치 ---
+    def _on_mode_clicked(self, i: int):
+        self._user_chose_mode = True
+        self.mode_tabs.setCurrentIndex(i)
+
+    def auto_select_mode(self):
+        """프로젝트를 열거나 새로 만들 때: 자막이 있으면 '자막 보며 녹음', 없으면 '자유롭게 녹음'.
+        사용자가 이미 모드를 고른 뒤에는 같은 프로젝트 안에서 다시 바꾸지 않습니다."""
+        if self._user_chose_mode:
+            return
+        from ..subtitles import has_subtitles
+        has = has_subtitles(self.model.project)
+        self.mode_tabs.setCurrentIndex(0 if has else 1)
+        (self.btn_mode_follow if has else self.btn_mode_free).setChecked(True)
+
     def refresh_devices(self):
         self.dev.blockSignals(True)
         self.dev.clear()
@@ -343,12 +358,15 @@ class DubbingPanel(QWidget):
         self.table.blockSignals(True)
         self.table.setRowCount(len(cues))
         n_rec = 0
+        first_todo = None
         for r, c in enumerate(cues):
             take = find_take(self.model.project, c.index)
             n = count_versions(self.model.project, c.index) if take else 0
             n_rec += 1 if take else 0
+            if take is None and first_todo is None:
+                first_todo = r
             vals = [str(c.index), fmt_time(c.start), fmt_time(c.end), f"{c.duration:.2f}", c.text.replace("\n", " / "),
-                    ("✔" + (f" {n}개 ▾" if n > 1 else "")) if take else ""]
+                    ("✔" + (f" {n}개 ▾" if n > 1 else "")) if take else ("▶ 여기부터" if r == first_todo else "")]
             tip = f"{c.index}번 · {fmt_time(c.start)} ~ {fmt_time(c.end)} ({c.duration:.2f}초)\n{c.text}"
             for col, v in enumerate(vals):
                 it = self.table.item(r, col)
@@ -358,9 +376,18 @@ class DubbingPanel(QWidget):
                 it.setText(v)
                 it.setToolTip(tip if col != 5 else ("녹음본 고르기 — 눌러서 열기" if n > 1 else "녹음 있음" if take else "아직 녹음 안 함"))
                 if col == 5:
-                    it.setForeground(QColor("#3fa36b"))
+                    it.setForeground(QColor("#3fa36b" if take else "#ffd54f"))
+                # 녹음 없는 첫 줄 강조
+                if r == first_todo:
+                    it.setBackground(QColor("#3a3520"))
+                else:
+                    it.setBackground(QColor())
             if c.index == sel:
                 self.table.selectRow(r)
+        # 선택된 게 없고 녹음 없는 첫 줄이 있으면 그 줄을 선택
+        if sel is None and first_todo is not None and cues:
+            self.table.selectRow(first_todo)
+            self.model.select("subtitle", cues[first_todo].index)
         self.table.blockSignals(False)
         self.list_sec.set_title(f"자막 {len(cues)}줄 · 녹음 {n_rec}줄" if cues else "자막 목록")
         self._apply_filter()

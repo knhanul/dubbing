@@ -257,6 +257,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("'🤖 AI 로 구성하기' 또는 '동영상+자막으로 더빙 시작'으로 시작하거나, "
                                      "탐색기에서 이미지·영상·폴더를 끌어다 놓으세요.")
         QTimer.singleShot(0, self._on_changed)
+        QTimer.singleShot(0, self.dub.auto_select_mode)
 
     # ------------------------------------------------------------------ 메뉴
     def _act(self, menu, text, slot, shortcut=None, tip=None):
@@ -736,6 +737,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("예전 형식 프로젝트를 새 전환 방식(경계 가운데)으로 바꿨습니다 — 보이는 시간은 그대로이고, "
                                          "저장하면 새 형식으로 저장됩니다.", 12000)
         self.preview.load_for_project()
+        self.dub._user_chose_mode = False
+        self.dub.auto_select_mode()
 
     # ------------------------------------------------------------------ 최근 파일
     def _fill_recent_menu(self):
