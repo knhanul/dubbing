@@ -19,3 +19,18 @@ def test_scan_and_build_prompt(tmp_path):
     assert "JSON 하나만" in text and "zoom_in" in text and "crossfade" in text
     # 예시 JSON 도 우리 추출기로 읽힘
     assert extract_json(text)["clips"]
+
+
+def test_prompt_mentions_subtitle_items_and_label(tmp_path):
+    """프롬프트에 subtitle.items 와 label 안내가 포함되어 있는지 확인."""
+    from composer.prompt_template import build_prompt, scan_folder
+    entries = scan_folder(tmp_path)
+    text = build_prompt(entries, "테스트", 1920, 1080, 30)
+    assert "subtitle.items" in text
+    assert "label" in text
+    assert "장면 이름" in text or "S04" in text
+    # 첫 번째 예시는 여전히 extract_json 으로 정상 추출
+    from composer.validate import extract_json
+    data = extract_json(text)
+    assert "clips" in data
+    assert data["subtitle"].get("file") == "subtitle.srt"

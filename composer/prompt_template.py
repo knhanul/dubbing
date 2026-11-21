@@ -84,6 +84,7 @@ RULES = f"""규칙:
 3. 시간 단위는 모두 초(소수점 가능)이다.
 4. clips 는 영상에 나올 순서대로 나열한다.
    - type: "image" 또는 "video"
+   - label: 장면 이름(예: S04). 선택 사항이며 타임라인에 표시된다.
    - 이미지: duration(표시 시간) 필수. motion 으로 움직임을 준다(영상 클립에도 쓸 수 있음).
      motion 값: {", ".join(MOTIONS)}
      motion_strength: 0~1 (0.1~0.25 권장, 클수록 많이 움직임)
@@ -99,7 +100,7 @@ RULES = f"""규칙:
      (전환이 길이를 줄이지 않는다). "version": 2 로 쓴다.
 5. output: width/height 는 짝수, fps 는 24/30/60 중 하나 권장. fit 은 "cover"(꽉 채움) 또는 "contain"(여백).
    output.fade_in / output.fade_out: 영상 시작/끝을 검은 화면에서·으로 서서히(초, 소리도 함께, 생략하면 0).
-6. subtitle.file 에는 .srt 파일, bgm.file 에는 음악 파일을 넣는다. 없으면 해당 항목을 생략한다.
+6. 자막은 두 방법 중 하나로 넣는다. (a) subtitle.file: 폴더에 있는 .srt/.vtt 파일. (b) subtitle.items: 자막을 JSON 안에 직접 넣는다. 각 항목은 index(1부터 차례대로 정수), start, end(초, end > start, 서로 겹치지 않음), text(줄바꿈은 \\n)이다. 폴더에 자막 파일이 없으면 (b)를 쓴다. 음악 파일은 bgm.file에 넣고, 없으면 해당 항목을 생략한다.
 7. subtitle.style (자막 모양, 생략 가능 — 영상 분위기에 맞게 골라도 됨):
    - font: Windows 글꼴 이름 (한글이 되는 글꼴: "Malgun Gothic", "Nanum Gothic", "NanumMyeongjo", "Gulim" 등)
    - size: 출력 높이 기준 픽셀 (1080p 에서 40~64 권장), bold: true/false
@@ -132,7 +133,18 @@ def build_prompt(entries: list[FileEntry], request: str = "", width: int = 1920,
         extra = f" ({e.info})" if e.info else ""
         lines.append(f"- {e.name} — {labels.get(e.kind, e.kind)}{extra}")
     lines += ["", "## 출력 형식", RULES, "", "형식 예시:", "```json",
-              json.dumps(EXAMPLE, ensure_ascii=False, indent=2), "```"]
+              json.dumps(EXAMPLE, ensure_ascii=False, indent=2), "```",
+              "", "자막을 파일 없이 직접 넣는 경우 예시 (subtitle.items):",
+              "```json",
+              json.dumps({
+                  "subtitle": {
+                      "items": [
+                          {"index": 1, "start": 0.0, "end": 3.5, "text": "첫 번째 자막\\n두 줄"},
+                          {"index": 2, "start": 3.5, "end": 7.0, "text": "두 번째 자막"}
+                      ]
+                  }
+              }, ensure_ascii=False, indent=2),
+              "```"]
     if schema_text:
         lines += ["", "정확한 JSON Schema:", "```json", schema_text.strip(), "```"]
     lines += ["", "이제 위 규칙대로 JSON 만 출력해."]

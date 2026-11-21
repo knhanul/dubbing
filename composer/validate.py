@@ -310,15 +310,31 @@ def validate_project(data: Any, base_dir: Path | str | None = None) -> list[Issu
             if isinstance(st.get("style"), dict):
                 _check_style(v, st["style"], "subtitle.style")
             if isinstance(st.get("items"), list):
+                seen_index = set()
+                prev_end = -1.0
                 for j, it in enumerate(st["items"]):
                     pp = f"subtitle.items[{j}]"
                     if not isinstance(it, dict):
                         v.err(pp, "객체여야 합니다.")
                         continue
+                    idx = it.get("index")
+                    if isinstance(idx, int):
+                        if idx in seen_index:
+                            v.warn(pp, f"index {idx} 가 중복됩니다.")
+                        seen_index.add(idx)
+                    else:
+                        v.warn(pp, "index 는 1부터 차례대로 정수여야 합니다.")
                     s = v.num(it, "start", pp, 0, required=True)
                     e = v.num(it, "end", pp, 0, required=True)
                     if _is_num(s) and _is_num(e) and e <= s:
                         v.err(pp, "end 는 start 보다 커야 합니다.")
+                    if _is_num(s) and _is_num(e) and prev_end >= 0 and s < prev_end - 1e-6:
+                        v.warn(pp, "이전 자막과 시간이 겹칩니다.")
+                    if _is_num(e):
+                        prev_end = max(prev_end, e)
+                    text = it.get("text")
+                    if not isinstance(text, str) or not text.strip():
+                        v.warn(pp, "text 가 비어 있습니다.")
                     if it.get("style") is not None:  # 이 자막만 다른 모양 (바꾼 칸만)
                         if isinstance(it["style"], dict):
                             _check_style(v, it["style"], f"{pp}.style")
