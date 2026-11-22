@@ -479,12 +479,12 @@ class MainWindow(QMainWindow):
         bar.setContentsMargins(4, 2, 4, 0)
         bar.setSpacing(3)
 
-        def b(text, tip, slot):
+        def b(text, tip, slot, layout=None):
             w = QPushButton(text)
             w.setToolTip(tip)
             w.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)  # 글자만큼만 (늘어나지 않게)
             w.clicked.connect(lambda _=False: slot())
-            bar.addWidget(w)
+            (bar if layout is None else layout).addWidget(w)
             return w
 
         def tool(action):
@@ -525,17 +525,14 @@ class MainWindow(QMainWindow):
         rl = QHBoxLayout(self.range_tools)
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(3)
-        self.btn_in = b("[ In", "구간 시작 표시 — 빨간 재생 위치 (I)", lambda: self.set_mark_in())
-        self.btn_out = b("Out ]", "구간 끝 표시 — 빨간 재생 위치 (O)", lambda: self.set_mark_out())
+        self.btn_in = b("[ In", "구간 시작 표시 — 빨간 재생 위치 (I)", lambda: self.set_mark_in(), rl)
+        self.btn_out = b("Out ]", "구간 끝 표시 — 빨간 재생 위치 (O)", lambda: self.set_mark_out(), rl)
         self.btn_cut_range = b("✂ 구간 잘라내기", "In~Out 구간을 빼고 뒤를 당겨 붙입니다 (Esc = In/Out 지우기)",
-                               self.cut_marked_range)
+                               self.cut_marked_range, rl)
         self.chk_all_tracks = QCheckBox("모든 트랙")
         self.chk_all_tracks.setChecked(True)
         self.chk_all_tracks.setToolTip("켜면 자막·더빙도 같은 구간을 빼고 함께 당깁니다(잠긴 트랙은 그대로)")
-        # 버튼을 bar 대신 range_tools 로 옮김
-        for w in (self.btn_in, self.btn_out, self.btn_cut_range, self.chk_all_tracks):
-            bar.removeWidget(w)
-            rl.addWidget(w)
+        rl.addWidget(self.chk_all_tracks)
         bar.addWidget(self.range_tools)
         self.range_tools.setVisible(open_range)
         sep()
@@ -601,6 +598,8 @@ class MainWindow(QMainWindow):
     def _ensure_range_tools_visible(self):
         if not self.range_tools.isVisible():
             self._set_range_tools_open(True)
+
+    def _on_track_add(self, kind: str):
         if kind == "bgm":
             self.add_bgm()
         elif kind == "subtitle":
