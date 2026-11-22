@@ -151,7 +151,7 @@ class DubbingPanel(QWidget):
         self.btn_test.setFixedHeight(26)
         self.btn_test.setToolTip("녹음하지 않고 마이크 소리 크기만 봅니다 (아래 막대와 파형) — 초록~노랑이면 좋아요")
         mic_row = hrow(QLabel("🎤"), self.dev, self.btn_test, self.btn_dev, stretches=[0, 1, 0, 0], spacing=4)
-        self.preroll = QDoubleSpinBox(); self.preroll.setRange(0, 10); self.preroll.setValue(2.0); self.preroll.setSuffix(" 초"); self.preroll.setSingleStep(0.5)
+        self.preroll = QDoubleSpinBox(); self.preroll.setRange(0, 10); self.preroll.setValue(1.0); self.preroll.setSuffix(" 초"); self.preroll.setSingleStep(0.5)
         self.preroll.setToolTip("녹음 직전에 앞부분을 이만큼 들려줘서 타이밍을 맞추기 쉽게 (프리롤)")
         self.postroll = QDoubleSpinBox(); self.postroll.setRange(0, 10); self.postroll.setValue(0.5); self.postroll.setSuffix(" 초"); self.postroll.setSingleStep(0.1)
         self.postroll.setToolTip("한 줄 녹음: 자막이 끝난 뒤 이만큼 더 녹음하고 멈춤 (그때 말하는 중이면 말이 끝날 때까지)")
