@@ -23,6 +23,28 @@ class Selection:
     index: int = -1  # 기준(마지막에 고른) 항목: clip index / subtitle index(자막 번호) / take list index
     extra: tuple = ()  # 같은 종류로 함께 고른 다른 항목들 (Ctrl/Shift+클릭 · 끌어서 고르기 · Ctrl+A)
 
+    def __post_init__(self):
+        # 목록이 들어오면 첫 값만 기준으로 두고, 나머지는 extra 로 (크래시 방지)
+        if isinstance(self.index, (list, tuple)):
+            vals = [int(i) for i in self.index if isinstance(i, (int, float))]
+            self.index = vals[0] if vals else -1
+            rest = tuple(i for i in vals[1:] if i != self.index)
+            self.extra = tuple(self.extra) + rest
+        else:
+            try:
+                self.index = int(self.index)
+            except (TypeError, ValueError):
+                self.index = -1
+        clean = []
+        for i in self.extra or ():
+            if isinstance(i, (list, tuple)):
+                continue
+            try:
+                clean.append(int(i))
+            except (TypeError, ValueError):
+                continue
+        self.extra = tuple(i for i in clean if i != self.index)
+
     @property
     def indices(self) -> list[int]:
         """고른 항목 전부(기준 항목 포함), 작은 번호부터."""
@@ -31,7 +53,7 @@ class Selection:
         try:
             return sorted({int(self.index), *(int(i) for i in self.extra)})
         except (TypeError, ValueError):
-            return []
+            return [self.index] if isinstance(self.index, int) else []
 
     @property
     def count(self) -> int:
@@ -215,6 +237,9 @@ class ProjectModel(QObject):
 
     # --- 선택 ---
     def select(self, kind: str, index: int = -1) -> None:
+        if isinstance(index, (list, tuple, range)):
+            self.select_many(kind, index)
+            return
         self.selection = Selection(kind, index)
         self.selection_changed.emit()
 

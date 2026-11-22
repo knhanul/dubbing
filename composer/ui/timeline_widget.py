@@ -473,7 +473,11 @@ class TimelineCanvas(QWidget):
             p.setPen(QPen(QColor("#8ab4f8"), 1, Qt.DashLine))
             p.setBrush(QColor(138, 180, 248, 40))
             p.drawRect(self.marquee)
-        if m.selection.count > 1:  # 몇 개 골랐는지 (눈금자 오른쪽)
+        try:
+            multi = m.selection.count > 1
+        except Exception:  # noqa: BLE001
+            multi = False
+        if multi:  # 몇 개 골랐는지 (눈금자 오른쪽)
             f6 = QFont(self.font()); f6.setPointSizeF(8); f6.setBold(True)
             p.setFont(f6)
             text = selection_text(m.selection)
