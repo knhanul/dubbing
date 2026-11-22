@@ -57,6 +57,43 @@ def delete_clip(project: Project, i: int) -> bool:
 
 
 # ------------------------------------------------------------------ 자막
+def split_merged_cue(project: Project, index: int) -> bool:
+    """합친 자막을 다시 둘로 나눕니다.
+
+    글에 줄바꿈이 있으면 그 자리에서 나누고, 없으면 시간·글의 가운데에서 나눕니다.
+    """
+    from .subtitles import ensure_items
+    items = ensure_items(project)
+    it = next((x for x in items if x.index == index), None)
+    if it is None or it.end - it.start < 0.2:
+        return False
+    text = it.text or ""
+    if "\n" in text:
+        a, b = text.split("\n", 1)
+        a, b = a.strip(), b.strip()
+        ratio = max(0.15, min(0.85, len(a) / max(1, len(a) + len(b))))
+    else:
+        mid = max(1, len(text) // 2)
+        # 가운데 근처 띄어쓰기
+        sp = text.rfind(" ", 0, mid + 1)
+        if sp <= 0:
+            sp = text.find(" ", mid)
+        if sp <= 0:
+            sp = mid
+        a, b = text[:sp].strip(), text[sp:].strip()
+        ratio = 0.5
+    if not a or not b:
+        return False
+    cut = round(it.start + (it.end - it.start) * ratio, 3)
+    if cut <= it.start + 0.05 or cut >= it.end - 0.05:
+        cut = round((it.start + it.end) / 2, 3)
+    new = SubtitleItem(0, cut, it.end, b, dict(it.style) if it.style else None)
+    it.end, it.text = cut, a
+    items = list(items) + [new]
+    _renumber(project, items)
+    return True
+
+
 def merge_next_cue(project: Project, index: int) -> bool:
     """index 번 자막과 바로 다음 자막을 하나로 합칩니다.
 
@@ -328,7 +365,7 @@ def clip_index_at(timeline: Timeline, t: float) -> Optional[int]:
     return c.index if c else None
 
 
-__all__ = ["split_clip", "delete_clip", "split_cue", "merge_next_cue", "split_take", "take_span", "cut_range", "clip_index_at",
+__all__ = ["split_clip", "delete_clip", "split_cue", "merge_next_cue", "split_merged_cue", "split_take", "take_span", "cut_range", "clip_index_at",
            "MIN_CLIP"]
 
 

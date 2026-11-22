@@ -647,6 +647,7 @@ class MainWindow(QMainWindow):
         m.addAction("＋ 여기에 자막", lambda: (self.player.seek(t), self.add_subtitle_here()))
         if sel.kind == "subtitle":
             m.addAction("🔗 다음 자막과 합치기", lambda: self.merge_selected_subtitle())
+            m.addAction("✂ 합친 자막 나누기", lambda: self.split_selected_subtitle())
         self._last_menu = m
         m.popup(gpos)
 
@@ -663,6 +664,21 @@ class MainWindow(QMainWindow):
             return False
         self.model.select("subtitle", idx)
         self.statusBar().showMessage(f"🔗 {idx}번과 다음 자막을 합쳤습니다 (Ctrl+Z 로 되돌리기)", 5000)
+        return True
+
+    def split_selected_subtitle(self) -> bool:
+        from ..edit_ops import split_merged_cue
+        s = self.model.selection
+        if s.kind != "subtitle" or self._locked_msg("subtitle"):
+            return False
+        idx = s.index
+        box = {}
+        self.model.edit(lambda p: box.setdefault("ok", split_merged_cue(p, idx)))
+        if not box.get("ok"):
+            self.statusBar().showMessage("나눌 수 없습니다 — 자막이 너무 짧거나 글이 한 조각입니다", 4000)
+            return False
+        self.model.select("subtitle", idx)
+        self.statusBar().showMessage(f"✂ {idx}번 자막을 둘로 나눴습니다 (Ctrl+Z 로 되돌리기)", 5000)
         return True
 
     def _on_track_add(self, kind: str):

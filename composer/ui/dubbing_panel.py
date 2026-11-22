@@ -116,6 +116,9 @@ class DubbingPanel(QWidget):
         self.btn_merge = QPushButton("🔗 다음 줄과 합치기")
         self.btn_merge.setToolTip("고른 자막과 바로 다음 자막을 하나로 합칩니다 (짧은 줄을 한 번에 녹음할 때)")
         self.btn_merge.clicked.connect(self.merge_selected)
+        self.btn_split = QPushButton("✂ 합친 줄 나누기")
+        self.btn_split.setToolTip("합친 자막을 다시 둘로 나눕니다. 줄바꿈이 있으면 그 자리에서, 없으면 가운데에서")
+        self.btn_split.clicked.connect(self.split_selected)
         self.btn_rec.setStyleSheet("QPushButton{background:#b3261e;color:white;font-weight:bold;padding:6px;border-radius:4px}")
         self.btn_rec.setMinimumHeight(34)
         self.btn_session = QPushButton(self.SESSION_TEXT)
@@ -130,7 +133,7 @@ class DubbingPanel(QWidget):
         self.btn_stop.setFixedSize(40, 34)
         rb = QHBoxLayout()
         rb.setSpacing(6)
-        rb.addWidget(self.btn_rec, 5); rb.addWidget(self.btn_merge, 3); rb.addWidget(self.btn_session, 4); rb.addWidget(self.btn_stop)
+        rb.addWidget(self.btn_rec, 5); rb.addWidget(self.btn_merge, 3); rb.addWidget(self.btn_split, 3); rb.addWidget(self.btn_session, 4); rb.addWidget(self.btn_stop)
         self.strip = MicStrip()  # 입력 소리: ● REC · 레벨 미터 · 흘러가는 파형 · 무음 경고
         self.strip.dev_label.hide()  # 장치 이름은 바로 위 마이크 칸에 이미 보임
 
@@ -646,6 +649,20 @@ class DubbingPanel(QWidget):
         self.status.emit(f"🔗 {cue.index}번과 다음 자막을 합쳤습니다 (Ctrl+Z 로 되돌리기)")
         return True
 
+    def split_selected(self) -> bool:
+        from ..edit_ops import split_merged_cue
+        cue = self.selected_cue()
+        if cue is None:
+            self.status.emit("나눌 자막 줄을 먼저 고르세요")
+            return False
+        box = {}
+        self.model.edit(lambda p: box.setdefault("ok", split_merged_cue(p, cue.index)))
+        if not box.get("ok"):
+            self.status.emit("나눌 수 없습니다 — 자막이 너무 짧거나 글이 한 조각입니다")
+            return False
+        self.status.emit(f"✂ {cue.index}번 자막을 둘로 나눴습니다 (Ctrl+Z 로 되돌리기)")
+        return True
+
     def record_line(self):
         if self.mode:
             self.stop_recording()
@@ -666,11 +683,14 @@ class DubbingPanel(QWidget):
         self.rec_offset = p0 - cue.start
         self._rec_p0, self._sync = p0, []
         stop = cue.end + self.postroll.value()
-        # 다음 자막이 가까우면 그 시작 0.1초 전까지만 녹음
-        nxt = self.model.cue_timeline.next(cue.end - 1e-6)
-        if nxt is not None and nxt.start > cue.start:
+        # 다음 자막이 가까우면 그 시작 0.1초 전까지만 녹음 (현재 자막 끝보다 앞이어도 지킴)
+        nxt = self.model.cue_timeline.next(cue.start)
+        if nxt is not None and nxt.index == cue.index:
+            nxt = self.model.cue_timeline.next(cue.end)
+        if nxt is not None and nxt.start > cue.start + 0.15:
             stop = min(stop, nxt.start - 0.1)
-        self.stop_at = max(cue.end, stop)
+        self.stop_at = stop
+        self._next_cap = stop  # 말이 길어져도 이 시각을 넘기지 않음
         self.extending = False
         self.player.pause()
         self.player.seek(p0)
@@ -733,6 +753,12 @@ class DubbingPanel(QWidget):
         if t < self.stop_at - 1e-6:
             return False
         quiet = self.recorder.tap.voice_quiet_seconds
+        hard = getattr(self, "_next_cap", None) or (self.rec_cue.end + max(self.MAX_EXTEND, self.postroll.value()))
+        # 다음 자막 앞에서 막힌 경우: 말이 이어져도 그 시각을 넘기지 않음
+        if t >= hard - 1e-6:
+            self.capped = True
+            self.stop_recording()
+            return True
         if not self.extending:
             if quiet >= self.VOICE_WINDOW:
                 self.stop_recording()
@@ -740,10 +766,8 @@ class DubbingPanel(QWidget):
             self.extending = True
             self.player.set_notice("● 말이 끝날 때까지 녹음 중…")
             self.status.emit(f"{self.rec_cue.index}번 자막: 아직 말하는 중이라 말이 끝날 때까지 녹음해요 "
-                             f"(최대 {self.MAX_EXTEND:g}초 더 · R·스페이스·■ 정지로 바로 끝내기)")
-        cap = self.rec_cue.end + max(self.MAX_EXTEND, self.postroll.value())
-        if quiet >= self.SILENCE_STOP or t >= cap - 1e-6:
-            self.capped = quiet < self.SILENCE_STOP
+                             f"(다음 자막 전까지만 · R·스페이스·■ 정지로 바로 끝내기)")
+        if quiet >= self.SILENCE_STOP:
             self.stop_recording()
             return True
         return False
