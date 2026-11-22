@@ -47,7 +47,8 @@ class ProjectController:
         if not self.maybe_save():
             return
         self.win.set_project(Project(base_dir=Path.home()), None)
-        self.win.statusBar().showMessage(self.win.EMPTY_HINT, 8000)
+        from .main_window import EMPTY_HINT
+        self.win.statusBar().showMessage(EMPTY_HINT.replace("\n", " "), 8000)
 
     def recent_files(self) -> list:
         v = self.win.settings.value("file/recent", [])
