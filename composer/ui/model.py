@@ -28,7 +28,10 @@ class Selection:
         """고른 항목 전부(기준 항목 포함), 작은 번호부터."""
         if not self.kind:
             return []
-        return sorted({self.index, *self.extra})
+        try:
+            return sorted({int(self.index), *(int(i) for i in self.extra)})
+        except (TypeError, ValueError):
+            return []
 
     @property
     def count(self) -> int:

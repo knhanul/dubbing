@@ -160,16 +160,11 @@ class TimelineController:
 
     # ------------------------------------------------------------------ 선택 / 삭제
     def select_track_all(self, kind: str) -> int:
-        if kind == "clip":
-            n = len(self.win.model.project.clips)
-        elif kind == "subtitle":
-            n = len(ensure_items(self.win.model.project))
-        elif kind == "take":
-            n = len(self.win.model.project.dubbing.takes)
-        else:
-            return 0
+        """한 트랙의 항목을 모두 고릅니다. 고른 개수를 돌려줍니다."""
+        n = self.win.model.select_all(kind)
         if n:
-            self.win.model.select(kind, list(range(n)))
+            from .timeline_widget import KIND_NAMES
+            self.win.statusBar().showMessage(f"{KIND_NAMES.get(kind, kind)} {n}개를 모두 골랐습니다", 3000)
         return n
 
     def delete_selected(self) -> bool:
