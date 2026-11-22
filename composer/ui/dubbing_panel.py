@@ -112,7 +112,7 @@ class DubbingPanel(QWidget):
         # --- 녹음 버튼 ---
         self.btn_rec = QPushButton(self.REC_TEXT)
         self.btn_rec.setToolTip("목록에서 고른 자막 한 줄을 녹음합니다 — 조금 앞부터 재생, 자막이 끝나면(+여유) 자동으로 멈춤. "
-                                "다음 자막이 가까우면 그 앞에서 멈춥니다.")
+                                "그때 아직 말하고 있으면 말이 끝날 때까지(최대 5초 더) 기다렸다가 멈춥니다.")
         self.btn_merge = QPushButton("🔗 다음 줄과 합치기")
         self.btn_merge.setToolTip("고른 자막과 바로 다음 자막을 하나로 합칩니다 (짧은 줄을 한 번에 녹음할 때)")
         self.btn_merge.clicked.connect(self.merge_selected)
@@ -683,14 +683,7 @@ class DubbingPanel(QWidget):
         self.rec_offset = p0 - cue.start
         self._rec_p0, self._sync = p0, []
         stop = cue.end + self.postroll.value()
-        # 다음 자막이 가까우면 그 시작 0.1초 전까지만 녹음 (현재 자막 끝보다 앞이어도 지킴)
-        nxt = self.model.cue_timeline.next(cue.start)
-        if nxt is not None and nxt.index == cue.index:
-            nxt = self.model.cue_timeline.next(cue.end)
-        if nxt is not None and nxt.start > cue.start + 0.15:
-            stop = min(stop, nxt.start - 0.1)
         self.stop_at = stop
-        self._next_cap = stop  # 말이 길어져도 이 시각을 넘기지 않음
         self.extending = False
         self.player.pause()
         self.player.seek(p0)
@@ -753,12 +746,6 @@ class DubbingPanel(QWidget):
         if t < self.stop_at - 1e-6:
             return False
         quiet = self.recorder.tap.voice_quiet_seconds
-        hard = getattr(self, "_next_cap", None) or (self.rec_cue.end + max(self.MAX_EXTEND, self.postroll.value()))
-        # 다음 자막 앞에서 막힌 경우: 말이 이어져도 그 시각을 넘기지 않음
-        if t >= hard - 1e-6:
-            self.capped = True
-            self.stop_recording()
-            return True
         if not self.extending:
             if quiet >= self.VOICE_WINDOW:
                 self.stop_recording()
@@ -766,8 +753,10 @@ class DubbingPanel(QWidget):
             self.extending = True
             self.player.set_notice("● 말이 끝날 때까지 녹음 중…")
             self.status.emit(f"{self.rec_cue.index}번 자막: 아직 말하는 중이라 말이 끝날 때까지 녹음해요 "
-                             f"(다음 자막 전까지만 · R·스페이스·■ 정지로 바로 끝내기)")
-        if quiet >= self.SILENCE_STOP:
+                             f"(최대 {self.MAX_EXTEND:g}초 더 · R·스페이스·■ 정지로 바로 끝내기)")
+        cap = self.rec_cue.end + max(self.MAX_EXTEND, self.postroll.value())
+        if quiet >= self.SILENCE_STOP or t >= cap - 1e-6:
+            self.capped = quiet < self.SILENCE_STOP
             self.stop_recording()
             return True
         return False
@@ -801,8 +790,6 @@ class DubbingPanel(QWidget):
         offset = self._measured_start(base + self.rec_offset) - base
         take = set_take(self.model.project, idx, self.rec_rel, offset)
         extra = self._fit_cue_to_voice(take, cue) if mode == "line" and cue is not None else ""
-        if mode == "line":
-            extra += self._trim_take_to_neighbors(take)
         self.model.commit()  # 녹음 + 자막 끝 늘리기 = 되돌리기 한 번
         msg = f"저장됨: {self.rec_rel} ({length:.1f}초)" + extra
         if capped:
