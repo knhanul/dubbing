@@ -112,8 +112,10 @@ class DubbingPanel(QWidget):
         # --- 녹음 버튼 ---
         self.btn_rec = QPushButton(self.REC_TEXT)
         self.btn_rec.setToolTip("목록에서 고른 자막 한 줄을 녹음합니다 — 조금 앞부터 재생, 자막이 끝나면(+여유) 자동으로 멈춤. "
-                                "그때 아직 말하고 있으면 말이 끝날 때까지(최대 5초 더) 기다렸다가 멈추고 자막 끝을 늘립니다. "
-                                "R·스페이스·■ 정지로 언제든 끝내기")
+                                "다음 자막이 가까우면 그 앞에서 멈춥니다.")
+        self.btn_merge = QPushButton("🔗 다음 줄과 합치기")
+        self.btn_merge.setToolTip("고른 자막과 바로 다음 자막을 하나로 합칩니다 (짧은 줄을 한 번에 녹음할 때)")
+        self.btn_merge.clicked.connect(self.merge_selected)
         self.btn_rec.setStyleSheet("QPushButton{background:#b3261e;color:white;font-weight:bold;padding:6px;border-radius:4px}")
         self.btn_rec.setMinimumHeight(34)
         self.btn_session = QPushButton(self.SESSION_TEXT)
@@ -128,7 +130,7 @@ class DubbingPanel(QWidget):
         self.btn_stop.setFixedSize(40, 34)
         rb = QHBoxLayout()
         rb.setSpacing(6)
-        rb.addWidget(self.btn_rec, 5); rb.addWidget(self.btn_session, 4); rb.addWidget(self.btn_stop)
+        rb.addWidget(self.btn_rec, 5); rb.addWidget(self.btn_merge, 3); rb.addWidget(self.btn_session, 4); rb.addWidget(self.btn_stop)
         self.strip = MicStrip()  # 입력 소리: ● REC · 레벨 미터 · 흘러가는 파형 · 무음 경고
         self.strip.dev_label.hide()  # 장치 이름은 바로 위 마이크 칸에 이미 보임
 
@@ -630,6 +632,20 @@ class DubbingPanel(QWidget):
                 return False
         return True
 
+    def merge_selected(self) -> bool:
+        from ..edit_ops import merge_next_cue
+        cue = self.selected_cue()
+        if cue is None:
+            self.status.emit("합칠 자막 줄을 먼저 고르세요")
+            return False
+        box = {}
+        self.model.edit(lambda p: box.setdefault("ok", merge_next_cue(p, cue.index)))
+        if not box.get("ok"):
+            self.status.emit("다음 자막이 없어 합칠 수 없습니다")
+            return False
+        self.status.emit(f"🔗 {cue.index}번과 다음 자막을 합쳤습니다 (Ctrl+Z 로 되돌리기)")
+        return True
+
     def record_line(self):
         if self.mode:
             self.stop_recording()
@@ -649,7 +665,12 @@ class DubbingPanel(QWidget):
         self.mode, self.rec_cue, self.rec_rel = "line", cue, rel
         self.rec_offset = p0 - cue.start
         self._rec_p0, self._sync = p0, []
-        self.stop_at = cue.end + self.postroll.value()
+        stop = cue.end + self.postroll.value()
+        # 다음 자막이 가까우면 그 시작 0.1초 전까지만 녹음
+        nxt = self.model.cue_timeline.next(cue.end - 1e-6)
+        if nxt is not None and nxt.start > cue.start:
+            stop = min(stop, nxt.start - 0.1)
+        self.stop_at = max(cue.end, stop)
         self.extending = False
         self.player.pause()
         self.player.seek(p0)
@@ -756,6 +777,8 @@ class DubbingPanel(QWidget):
         offset = self._measured_start(base + self.rec_offset) - base
         take = set_take(self.model.project, idx, self.rec_rel, offset)
         extra = self._fit_cue_to_voice(take, cue) if mode == "line" and cue is not None else ""
+        if mode == "line":
+            extra += self._trim_take_to_neighbors(take)
         self.model.commit()  # 녹음 + 자막 끝 늘리기 = 되돌리기 한 번
         msg = f"저장됨: {self.rec_rel} ({length:.1f}초)" + extra
         if capped:
@@ -783,8 +806,7 @@ class DubbingPanel(QWidget):
     NEXT_GAP = 0.05  # 다음 자막 시작보다 이만큼 앞까지만
 
     def _fit_cue_to_voice(self, take, cue) -> str:
-        """선택 자막 녹음이 끝난 뒤: 끝의 무음을 잘라 내고, 목소리가 자막보다 늦게 끝나면 자막 끝을 늘림(줄이지는 않음).
-        프로젝트만 고치고 commit 은 부르는 쪽에서. 상태 표시줄에 붙일 글을 돌려줌."""
+        """선택 자막 녹음이 끝난 뒤: 끝의 무음을 잘라 내고, 목소리가 자막보다 늦게 끝나면 자막 끝을 늘림."""
         from ..dubbing.levels import speech_end
         from ..subtitles import ensure_items, project_cues
         from ..timeline import take_position
@@ -801,7 +823,7 @@ class DubbingPanel(QWidget):
         cur = by.get(cue.index)
         if cur is None:
             return ""
-        voice_end = take_position(take, by, pr.dubbing.latency_ms) + se  # 타임라인에서 목소리가 끝나는 곳
+        voice_end = take_position(take, by, pr.dubbing.latency_ms) + se
         want = round(voice_end + self.CUE_TAIL, 3)
         if want <= cur.end + 1e-3:
             return ""
@@ -819,6 +841,37 @@ class DubbingPanel(QWidget):
             return ""
         it.end = round(want - pr.subtitle.offset, 3)
         return f" — {cue.index}번 자막 끝을 {fmt_time(cur.end)} → {fmt_time(want)}로 늘렸어요" + note
+
+    def _trim_take_to_neighbors(self, take) -> str:
+        """저장한 더빙이 앞/뒤 더빙과 겹치면 그 사이만 남기도록 잘라냅니다."""
+        from ..edit_ops import take_span
+        pr = self.model.project
+        try:
+            k = pr.dubbing.takes.index(take)
+        except ValueError:
+            return ""
+        s, e = take_span(pr, k, self.model.take_file_len)
+        others = []
+        for i, tk in enumerate(pr.dubbing.takes):
+            if i == k:
+                continue
+            os, oe = take_span(pr, i, self.model.take_file_len)
+            others.append((os, oe))
+        note = ""
+        # 앞 조각 끝 이후로 시작
+        prev_end = max((oe for os, oe in others if oe <= s + 0.2), default=None)
+        if prev_end is not None and s < prev_end - 0.02:
+            cut = round((take.trim_start or 0.0) + (prev_end - s) + 0.02, 3)
+            take.trim_start = cut
+            note = " — 앞 더빙과 겹치지 않게 앞을 잘랐습니다"
+        # 뒤 조각 시작 전으로 끝
+        next_start = min((os for os, oe in others if os >= e - 0.2), default=None)
+        if next_start is not None and e > next_start + 0.02:
+            flen = self.model.take_file_len(take.file)
+            te = take.trim_end if take.trim_end is not None else flen
+            take.trim_end = round(te - (e - next_start) - 0.02, 3)
+            note += " — 다음 더빙과 겹치지 않게 뒤를 잘랐습니다"
+        return note
 
     def play_take(self, take_index: int, with_video: bool):
         takes = self.model.project.dubbing.takes

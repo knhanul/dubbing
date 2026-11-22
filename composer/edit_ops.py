@@ -57,6 +57,31 @@ def delete_clip(project: Project, i: int) -> bool:
 
 
 # ------------------------------------------------------------------ 자막
+def merge_next_cue(project: Project, index: int) -> bool:
+    """index 번 자막과 바로 다음 자막을 하나로 합칩니다.
+
+    글은 줄바꿈으로 이어 붙이고, 시간은 앞 시작~뒤 끝입니다.
+    앞 줄에 더빙이 있으면 유지하고, 뒤 줄 더빙은 자막 연결을 끊습니다(절대 위치로 남김).
+    """
+    from .subtitles import ensure_items
+    items = ensure_items(project)
+    items.sort(key=lambda x: (x.start, x.end))
+    i = next((k for k, it in enumerate(items) if it.index == index), None)
+    if i is None or i + 1 >= len(items):
+        return False
+    a, b = items[i], items[i + 1]
+    a.end = b.end
+    a.text = (a.text.rstrip() + "\n" + b.text.lstrip()).strip()
+    # 뒤 줄 더빙은 자막 번호에서 떼어 절대 위치로 (파일은 남김)
+    for tk in project.dubbing.takes:
+        if tk.subtitle == b.index:
+            tk.subtitle = None
+            tk.offset = round(b.start + (tk.offset or 0.0), 3)
+    items.pop(i + 1)
+    _renumber(project, items)
+    return True
+
+
 def _renumber(project: Project, items: list[SubtitleItem]):
     """번호를 1..n 으로 다시 매기고, 자막에 묶인 더빙의 번호도 함께 바꿈."""
     mapping = {}
@@ -303,7 +328,7 @@ def clip_index_at(timeline: Timeline, t: float) -> Optional[int]:
     return c.index if c else None
 
 
-__all__ = ["split_clip", "delete_clip", "split_cue", "split_take", "take_span", "cut_range", "clip_index_at",
+__all__ = ["split_clip", "delete_clip", "split_cue", "merge_next_cue", "split_take", "take_span", "cut_range", "clip_index_at",
            "MIN_CLIP"]
 
 

@@ -645,8 +645,35 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         m.addAction("＋ 여기에 전환", lambda: (self.player.seek(t), self.add_transition_here()))
         m.addAction("＋ 여기에 자막", lambda: (self.player.seek(t), self.add_subtitle_here()))
+        if sel.kind == "subtitle":
+            m.addAction("🔗 다음 자막과 합치기", lambda: self.merge_selected_subtitle())
         self._last_menu = m
         m.popup(gpos)
+
+    def merge_selected_subtitle(self) -> bool:
+        from ..edit_ops import merge_next_cue
+        s = self.model.selection
+        if s.kind != "subtitle" or self._locked_msg("subtitle"):
+            return False
+        idx = s.index
+        box = {}
+        self.model.edit(lambda p: box.setdefault("ok", merge_next_cue(p, idx)))
+        if not box.get("ok"):
+            self.statusBar().showMessage("합칠 다음 자막이 없습니다", 4000)
+            return False
+        self.model.select("subtitle", idx)
+        self.statusBar().showMessage(f"🔗 {idx}번과 다음 자막을 합쳤습니다 (Ctrl+Z 로 되돌리기)", 5000)
+        return True
+
+    def _on_track_add(self, kind: str):
+        if kind == "bgm":
+            self.add_bgm()
+        elif kind == "subtitle":
+            self.add_subtitle_file()
+        elif kind == "clip":
+            self.add_clips()
+        elif kind == "take":
+            self.right.setCurrentWidget(self.dub_scroll)
 
     BGM_PREP = "♪ 배경음악 준비 중… (잠시 뒤 함께 들려요)"
 
